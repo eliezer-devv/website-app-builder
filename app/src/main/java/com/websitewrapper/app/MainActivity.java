@@ -18,7 +18,6 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.net.URI;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
@@ -40,11 +39,11 @@ public class MainActivity extends Activity {
         String host = homeUri.getHost();
 
         if (host == null || host.isEmpty()) {
-            showError("Invalid website address: " + HOME_URL);
+            showInitialError("Invalid website address:\n" + HOME_URL);
             return;
         }
 
-        // Treat www.example.com and example.com as the same site.
+        // Normalize the configured domain.
         allowedHost = host.toLowerCase(Locale.ROOT);
         if (allowedHost.startsWith("www.")) {
             allowedHost = allowedHost.substring(4);
@@ -112,10 +111,12 @@ public class MainActivity extends Activity {
                     WebView view,
                     WebResourceRequest request
             ) {
+                // Embedded resources can load from other domains.
                 if (!request.isForMainFrame()) {
                     return false;
                 }
 
+                // Only allow approved page navigation.
                 return !isAllowed(request.getUrl());
             }
 
@@ -134,14 +135,12 @@ public class MainActivity extends Activity {
                     String url,
                     android.graphics.Bitmap favicon
             ) {
-                errorLayout.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
+                hideError();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                errorLayout.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
+                hideError();
             }
 
             @Override
@@ -151,9 +150,14 @@ public class MainActivity extends Activity {
                     WebResourceError error
             ) {
                 if (request.isForMainFrame()) {
-                    String description = error.getDescription().toString();
-                    lastError = "Could not load the website.\n\n" + description
-                            + "\n\nAddress: " + request.getUrl();
+                    String description =
+                            error.getDescription().toString();
+
+                    lastError = "Could not load the website.\n\n"
+                            + description
+                            + "\n\nAddress: "
+                            + request.getUrl();
+
                     showError(lastError);
                 }
             }
@@ -168,14 +172,22 @@ public class MainActivity extends Activity {
             ) {
                 if (Build.VERSION.SDK_INT < 23) {
                     lastError = "Could not load the website.\n\n"
-                            + description + "\n\nAddress: " + failingUrl;
+                            + description
+                            + "\n\nAddress: "
+                            + failingUrl;
+
                     showError(lastError);
                 }
             }
         });
 
         if (savedInstanceState != null) {
-            webView.restoreState(savedInstanceState);
+            android.webkit.WebBackForwardList restored =
+                    webView.restoreState(savedInstanceState);
+
+            if (restored == null || restored.getSize() == 0) {
+                loadHome();
+            }
         } else {
             loadHome();
         }
@@ -192,17 +204,36 @@ public class MainActivity extends Activity {
 
         String host = uri.getHost().toLowerCase(Locale.ROOT);
 
-        // Allow the original domain and its subdomains, but not
-        // unrelated domains such as example.com.evil.com.
-        return host.equals(allowedHost)
-                || host.endsWith("." + allowedHost);
+        // Allow the configured domain and its subdomains.
+        // This does not allow lookalike domains such as
+        // example.com.evil.com.
+        if (host.equals(allowedHost)
+                || host.endsWith("." + allowedHost)) {
+            return true;
+        }
+
+        // Google Apps Script web apps can redirect from
+        // script.google.com to script.googleusercontent.com.
+        // Allow this redirect only for Apps Script apps.
+        return "script.google.com".equals(allowedHost)
+                && "script.googleusercontent.com".equals(host);
     }
 
     private void loadHome() {
         if (webView != null) {
-            errorLayout.setVisibility(View.GONE);
+            hideError();
             webView.setVisibility(View.VISIBLE);
             webView.loadUrl(HOME_URL);
+        }
+    }
+
+    private void hideError() {
+        if (errorLayout != null) {
+            errorLayout.setVisibility(View.GONE);
+        }
+
+        if (webView != null) {
+            webView.setVisibility(View.VISIBLE);
         }
     }
 
@@ -213,9 +244,30 @@ public class MainActivity extends Activity {
             errorText.setText(
                     "Website could not be opened\n\n" + lastError
             );
-            webView.setVisibility(View.GONE);
+
+            if (webView != null) {
+                webView.setVisibility(View.GONE);
+            }
+
             errorLayout.setVisibility(View.VISIBLE);
         }
+    }
+
+    private void showInitialError(String message) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(32, 32, 32, 32);
+        root.setBackgroundColor(Color.WHITE);
+
+        TextView messageView = new TextView(this);
+        messageView.setTextColor(Color.DKGRAY);
+        messageView.setTextSize(16);
+        messageView.setGravity(Gravity.CENTER);
+        messageView.setText(message);
+
+        root.addView(messageView);
+        setContentView(root);
     }
 
     @Override
@@ -223,8 +275,7 @@ public class MainActivity extends Activity {
         if (errorLayout != null
                 && errorLayout.getVisibility() == View.VISIBLE) {
             if (webView != null && webView.canGoBack()) {
-                errorLayout.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
+                hideError();
                 webView.goBack();
             } else {
                 super.onBackPressed();
@@ -239,6 +290,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
+
         if (webView != null) {
             webView.saveState(outState);
         }
@@ -249,6 +301,7 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.destroy();
         }
+
         super.onDestroy();
     }
 }
