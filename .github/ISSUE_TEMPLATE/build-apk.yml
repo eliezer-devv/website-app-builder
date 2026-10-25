@@ -1,0 +1,47 @@
+name: Build a website APK
+description: Configure and build an Android app for a website.
+title: "Build a website APK"
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill in the app details below. The build will run through GitHub Actions.
+
+  - type: input
+    id: website_url
+    attributes:
+      label: Website URL
+      description: The website that should open when the app launches.
+      placeholder: https://example.com/
+    validations:
+      required: true
+
+  - type: input
+    id: app_name
+    attributes:
+      label: App name
+      description: The name shown under the Android app icon.
+      placeholder: My Website
+    validations:
+      required: true
+
+  - type: input
+    id: package_name
+    attributes:
+      label: Package name
+      description: Must be unique for each app, using Android package-name format.
+      placeholder: com.example.mywebsite
+    validations:
+      required: true
+      pattern: '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$'
+      patternError: Enter a valid package name, such as com.example.mywebsite.
+
+  - type: input
+    id: icon_url
+    attributes:
+      label: App icon URL (optional)
+      description: A direct link to a PNG, JPG, or other supported image file.
+      placeholder: https://example.com/icon.png
+    validations:
+      required: false
