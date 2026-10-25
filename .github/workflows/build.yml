@@ -31,6 +31,9 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Install image tools
+        run: python3 -m pip install --quiet Pillow
+
       - name: Read build request and configure app
         shell: bash
         run: |
@@ -69,18 +72,16 @@ jobs:
           package = field("Package name").strip()
           icon_url = field("App icon URL (optional)").strip()
 
-          # Automatically add HTTPS if only a domain was entered.
           if url and not re.match(r"^https?://", url, re.IGNORECASE):
               url = "https://" + url
 
           print("Website URL received:", repr(url))
           print("App name received:", repr(name))
           print("Package name received:", repr(package))
+          print("Custom icon provided:", bool(icon_url))
 
           if not re.fullmatch(r"https?://\S+", url, re.IGNORECASE):
-              raise SystemExit(
-                  f"Invalid website URL: {url!r}"
-              )
+              raise SystemExit(f"Invalid website URL: {url!r}")
 
           if not name or len(name) > 60:
               raise SystemExit(
@@ -141,9 +142,7 @@ jobs:
               config, encoding="ascii"
           )
 
-          Path("icon-url.txt").write_text(
-              icon_url, encoding="utf-8"
-          )
+          Path("icon-url.txt").write_text(icon_url, encoding="utf-8")
 
           print("App configuration created successfully.")
           PY
@@ -151,34 +150,87 @@ jobs:
       - name: Download and validate optional app icon
         shell: bash
         run: |
+          set -euo pipefail
+
           ICON_URL="$(cat icon-url.txt)"
 
-          if [ -n "$ICON_URL" ]; then
-            python3 -m pip install --quiet Pillow
+          # Do not accidentally reuse an old icon.
+          rm -f webapp-icon.png icon-download.tmp
 
-            curl \
-              --fail \
-              --location \
-              --silent \
-              --show-error \
-              --max-time 30 \
-              "$ICON_URL" \
-              --output webapp-icon.png
-
-            python3 - <<'PY'
-          from PIL import Image
-
-          image = Image.open("webapp-icon.png")
-          image.verify()
-
-          print("App icon image validated.")
-          PY
+          if [ -z "$ICON_URL" ]; then
+            echo "No custom icon provided; using the template icon."
+            exit 0
           fi
 
+          echo "Downloading custom app icon..."
+
+          if ! curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --max-time 45 \
+            --max-filesize 10485760 \
+            --user-agent "WebsiteAppBuilder/1.0" \
+            "$ICON_URL" \
+            --output icon-download.tmp; then
+            echo "::error::Icon download failed. Check that the URL is publicly accessible and points directly to an image."
+            exit 1
+          fi
+
+          python3 <<'PY'
+          from pathlib import Path
+          from PIL import Image, UnidentifiedImageError
+          import sys
+
+          source = Path("icon-download.tmp")
+          output = Path("webapp-icon.png")
+
+          if not source.exists() or source.stat().st_size == 0:
+              sys.exit(
+                  "Icon download was empty. Please provide a direct, "
+                  "publicly accessible image URL."
+              )
+
+          try:
+              with Image.open(source) as image:
+                  image_format = image.format
+                  image.verify()
+
+              # Reopen after verify; verify() invalidates normal image reading.
+              with Image.open(source) as image:
+                  image.load()
+
+                  if image.width < 1 or image.height < 1:
+                      raise ValueError("Image has invalid dimensions.")
+
+                  if image.width > 10000 or image.height > 10000:
+                      raise ValueError(
+                          "Image dimensions are too large; maximum is "
+                          "10000 x 10000 pixels."
+                      )
+
+                  image = image.convert("RGBA")
+                  image.save(output, format="PNG", optimize=True)
+
+              print(
+                  f"Icon validated and converted to PNG "
+                  f"(original format: {image_format})."
+              )
+
+          except (UnidentifiedImageError, OSError, ValueError) as error:
+              sys.exit(
+                  "The icon URL did not provide a valid, supported image. "
+                  "It may point to a webpage instead of an image, require "
+                  "sign-in, or contain a damaged/unsupported file. "
+                  f"Details: {error}"
+              )
+          PY
+
+          rm -f icon-download.tmp
+
       - name: Generate launcher icons
-        run: |
-          python3 -m pip install --quiet Pillow
-          python3 scripts/generate_icons.py
+        run: python3 scripts/generate_icons.py
 
       - name: Build APK
         run: gradle assembleDebug
