@@ -1,0 +1,43 @@
+name: Test Builder Token
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check token authentication
+        env:
+          BUILDER_TOKEN: ${{ secrets.BUILDER_TOKEN }}
+        run: |
+          if [ -z "$BUILDER_TOKEN" ]; then
+            echo "FAIL: BUILDER_TOKEN secret is missing."
+            exit 1
+          fi
+
+          STATUS=$(curl -sS \
+            -o response.json \
+            -w "%{http_code}" \
+            -H "Authorization: Bearer $BUILDER_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/eliezer-devv/website-app-builder/actions/workflows")
+
+          echo "GitHub API returned HTTP $STATUS"
+
+          if [ "$STATUS" = "200" ]; then
+            echo "SUCCESS: GitHub accepted the token."
+          elif [ "$STATUS" = "401" ]; then
+            echo "FAIL: GitHub rejected the token."
+            exit 1
+          elif [ "$STATUS" = "403" ]; then
+            echo "Permission denied. Check token permissions."
+            exit 1
+          else
+            echo "Unexpected response. Check repository access and settings."
+            exit 1
+          fi
