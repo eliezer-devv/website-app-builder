@@ -1,28 +1,145 @@
-name: Build APK
+name: Build Website APK
+
 on:
-  workflow_dispatch:
+  issues:
+    types: [opened]
+
 permissions:
   contents: read
   actions: read
+
 jobs:
   build:
+    if: >-
+      github.event.issue.user.login == github.repository_owner &&
+      github.event.issue.title == 'Build a website APK'
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-      - name: Generate launcher icons from uploaded image
+
+      - name: Read build request and configure app
+        shell: bash
+        run: |
+          jq -r '.issue.body' "$GITHUB_EVENT_PATH" > issue-body.md
+
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          body = Path("issue-body.md").read_text(encoding="utf-8")
+
+          def field(label):
+              pattern = (
+                  r"(?ms)^### " + re.escape(label) +
+                  r"\s*\n(.*?)(?=^### |\Z)"
+              )
+              match = re.search(pattern, body)
+              if not match:
+                  raise SystemExit(f"Missing form field: {label}")
+
+              value = match.group(1).strip()
+              if value == "_No response_":
+                  return ""
+              return value
+
+          url = field("Website URL").strip()
+          name = field("App name").strip()
+          package = field("Package name").strip()
+          icon_url = field("App icon URL (optional)").strip()
+
+          if not re.fullmatch(r"https?://\S+", url):
+              raise SystemExit("Website URL must begin with http:// or https://")
+
+          if not name or len(name) > 60 or "\n" in name:
+              raise SystemExit("App name must be 1–60 characters.")
+
+          if not re.fullmatch(
+              r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+",
+              package
+          ):
+              raise SystemExit("Invalid Android package name.")
+
+          if icon_url and not re.fullmatch(r"https?://\S+", icon_url):
+              raise SystemExit("Icon URL must begin with http:// or https://")
+
+          def escape_property(value):
+              result = []
+              for char in value:
+                  code = ord(char)
+                  if char == "\\":
+                      result.append("\\\\")
+                  elif char == "\n":
+                      result.append("\\n")
+                  elif char == "\r":
+                      result.append("\\r")
+                  elif char in "=:#!" :
+                      result.append("\\" + char)
+                  elif code > 0xFFFF:
+                      code -= 0x10000
+                      result.append(
+                          "\\u%04X\\u%04X" % (
+                              0xD800 + (code >> 10),
+                              0xDC00 + (code & 0x3FF)
+                          )
+                      )
+                  elif code > 0x7E:
+                      result.append(f"\\u{code:04X}")
+                  else:
+                      result.append(char)
+              return "".join(result)
+
+          Path("app-config.properties").write_text(
+              "package_name=" + escape_property(package) + "\n" +
+              "app_name=" + escape_property(name) + "\n" +
+              "home_url=" + escape_property(url) + "\n",
+              encoding="ascii"
+          )
+
+          Path("icon-url.txt").write_text(icon_url, encoding="utf-8")
+          print("App configuration created.")
+          PY
+
+      - name: Download and validate optional app icon
+        shell: bash
+        run: |
+          ICON_URL="$(cat icon-url.txt)"
+
+          if [ -n "$ICON_URL" ]; then
+            python3 -m pip install --quiet Pillow
+            curl --fail --location --silent --show-error \
+              --max-time 30 "$ICON_URL" -o webapp-icon.png
+
+            python3 - <<'PY'
+          from PIL import Image
+          image = Image.open("webapp-icon.png")
+          image.verify()
+          print("Icon image validated.")
+          PY
+          fi
+
+      - name: Generate launcher icons
         run: |
           python3 -m pip install --quiet Pillow
           python3 scripts/generate_icons.py
+
       - name: Build APK
         run: gradle assembleDebug
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: website-app-apk
           path: app/build/outputs/apk/debug/app-debug.apk
