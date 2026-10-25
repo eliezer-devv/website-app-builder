@@ -8,9 +8,11 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -25,11 +27,12 @@ public class MainActivity extends Activity {
     private static final String HOME_URL = BuildConfig.HOME_URL;
 
     private WebView webView;
+    private LinearLayout rootLayout;
     private LinearLayout errorLayout;
     private TextView errorText;
-    private String lastError = "The website could not be loaded.";
 
     private String allowedHost;
+    private boolean mainFrameLoadFailed = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,23 +41,43 @@ public class MainActivity extends Activity {
         Uri homeUri = Uri.parse(HOME_URL);
         String host = homeUri.getHost();
 
-        if (host == null || host.isEmpty()) {
-            showInitialError("Invalid website address:\n" + HOME_URL);
+        if (host == null || host.isEmpty()
+                || !"https".equalsIgnoreCase(homeUri.getScheme())) {
+            showInitialError(
+                    "Invalid website address.\n\n" + HOME_URL
+            );
             return;
         }
 
-        // Normalize the configured domain.
         allowedHost = host.toLowerCase(Locale.ROOT);
+
         if (allowedHost.startsWith("www.")) {
             allowedHost = allowedHost.substring(4);
         }
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.WHITE);
+        buildLayout();
+        configureWebView();
+
+        if (savedInstanceState != null) {
+            Bundle webState = savedInstanceState.getBundle("webview_state");
+
+            if (webState == null
+                    || webView.restoreState(webState) == null) {
+                loadHome();
+            }
+        } else {
+            loadHome();
+        }
+    }
+
+    private void buildLayout() {
+        rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setBackgroundColor(Color.WHITE);
 
         webView = new WebView(this);
-        root.addView(webView, new LinearLayout.LayoutParams(
+
+        rootLayout.addView(webView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1
@@ -71,33 +94,42 @@ public class MainActivity extends Activity {
         errorText.setTextColor(Color.DKGRAY);
         errorText.setTextSize(16);
         errorText.setGravity(Gravity.CENTER);
+
         errorLayout.addView(errorText);
 
         Button retryButton = new Button(this);
         retryButton.setText("Try again");
         retryButton.setOnClickListener(v -> loadHome());
+
         errorLayout.addView(retryButton);
 
-        root.addView(errorLayout, new LinearLayout.LayoutParams(
+        rootLayout.addView(errorLayout, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1
         ));
 
-        setContentView(root);
+        setContentView(rootLayout);
+    }
 
+    private void configureWebView() {
         WebSettings settings = webView.getSettings();
+
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
 
-        if (Build.VERSION.SDK_INT >= 21) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            // Allow HTTPS websites to load mixed-content resources
+            // according to WebView's compatibility rules.
             settings.setMixedContentMode(
                     WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             );
+
             CookieManager.getInstance()
                     .setAcceptThirdPartyCookies(webView, true);
         }
@@ -111,13 +143,35 @@ public class MainActivity extends Activity {
                     WebView view,
                     WebResourceRequest request
             ) {
-                // Embedded resources can load from other domains.
+                Uri uri = request.getUrl();
+
+                // Allow resources and embedded frames from other domains.
+                // This includes scripts, stylesheets, images, fonts,
+                // APIs and embedded media.
                 if (!request.isForMainFrame()) {
                     return false;
                 }
 
-                // Only allow approved page navigation.
-                return !isAllowed(request.getUrl());
+                // Allow normal navigation within the original website.
+                if (isOriginalSite(uri)) {
+                    return false;
+                }
+
+                // Allow cross-domain redirects, which some sites need
+                // to complete forms and open their web applications.
+                // Ordinary clicks to unrelated sites remain blocked.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                        && request.isRedirect()) {
+                    return false;
+                }
+
+                // Permit the standard Google Apps Script redirect.
+                if (isGoogleAppsScriptRedirect(uri)) {
+                    return false;
+                }
+
+                // Block other top-level navigation away from the site.
+                return true;
             }
 
             @SuppressWarnings("deprecation")
@@ -126,7 +180,16 @@ public class MainActivity extends Activity {
                     WebView view,
                     String url
             ) {
-                return !isAllowed(Uri.parse(url));
+                Uri uri = Uri.parse(url);
+
+                if (isOriginalSite(uri)
+                        || isGoogleAppsScriptRedirect(uri)) {
+                    return false;
+                }
+
+                // Older Android versions do not expose redirect
+                // information in this callback. Keep the site restriction.
+                return true;
             }
 
             @Override
@@ -135,12 +198,17 @@ public class MainActivity extends Activity {
                     String url,
                     android.graphics.Bitmap favicon
             ) {
+                mainFrameLoadFailed = false;
                 hideError();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                hideError();
+                // Do not hide a main-frame error just because WebView
+                // subsequently reports that the failed page finished.
+                if (!mainFrameLoadFailed) {
+                    hideError();
+                }
             }
 
             @Override
@@ -150,15 +218,14 @@ public class MainActivity extends Activity {
                     WebResourceError error
             ) {
                 if (request.isForMainFrame()) {
-                    String description =
-                            error.getDescription().toString();
+                    mainFrameLoadFailed = true;
 
-                    lastError = "Could not load the website.\n\n"
-                            + description
-                            + "\n\nAddress: "
-                            + request.getUrl();
-
-                    showError(lastError);
+                    showError(
+                            "The website could not be loaded.\n\n"
+                                    + error.getDescription()
+                                    + "\n\nAddress:\n"
+                                    + request.getUrl()
+                    );
                 }
             }
 
@@ -170,30 +237,70 @@ public class MainActivity extends Activity {
                     String description,
                     String failingUrl
             ) {
-                if (Build.VERSION.SDK_INT < 23) {
-                    lastError = "Could not load the website.\n\n"
-                            + description
-                            + "\n\nAddress: "
-                            + failingUrl;
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                    mainFrameLoadFailed = true;
 
-                    showError(lastError);
+                    showError(
+                            "The website could not be loaded.\n\n"
+                                    + description
+                                    + "\n\nAddress:\n"
+                                    + failingUrl
+                    );
                 }
             }
-        });
 
-        if (savedInstanceState != null) {
-            android.webkit.WebBackForwardList restored =
-                    webView.restoreState(savedInstanceState);
+            @Override
+            public void onReceivedHttpError(
+                    WebView view,
+                    WebResourceRequest request,
+                    WebResourceResponse response
+            ) {
+                if (request.isForMainFrame()
+                        && response.getStatusCode() >= 400) {
+                    mainFrameLoadFailed = true;
 
-            if (restored == null || restored.getSize() == 0) {
-                loadHome();
+                    showError(
+                            "The website returned an error.\n\n"
+                                    + "HTTP status: "
+                                    + response.getStatusCode()
+                                    + "\n\nAddress:\n"
+                                    + request.getUrl()
+                    );
+                }
             }
-        } else {
-            loadHome();
-        }
+
+            @Override
+            public boolean onRenderProcessGone(
+                    WebView view,
+                    RenderProcessGoneDetail detail
+            ) {
+                // Recreate the WebView if its rendering process crashes.
+                if (webView != null) {
+                    rootLayout.removeView(webView);
+                    webView.destroy();
+                }
+
+                webView = new WebView(MainActivity.this);
+
+                rootLayout.addView(
+                        webView,
+                        0,
+                        new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                0,
+                                1
+                        )
+                );
+
+                configureWebView();
+                loadHome();
+
+                return true;
+            }
+        });
     }
 
-    private boolean isAllowed(Uri uri) {
+    private boolean isOriginalSite(Uri uri) {
         if (uri == null || uri.getHost() == null) {
             return false;
         }
@@ -204,25 +311,27 @@ public class MainActivity extends Activity {
 
         String host = uri.getHost().toLowerCase(Locale.ROOT);
 
-        // Allow the configured domain and its subdomains.
-        // This does not allow lookalike domains such as
-        // example.com.evil.com.
-        if (host.equals(allowedHost)
-                || host.endsWith("." + allowedHost)) {
-            return true;
+        // Exact host or a genuine subdomain.
+        return host.equals(allowedHost)
+                || host.endsWith("." + allowedHost);
+    }
+
+    private boolean isGoogleAppsScriptRedirect(Uri uri) {
+        if (uri == null || uri.getHost() == null) {
+            return false;
         }
 
-        // Google Apps Script web apps can redirect from
-        // script.google.com to script.googleusercontent.com.
-        // Allow this redirect only for Apps Script apps.
         return "script.google.com".equals(allowedHost)
-                && "script.googleusercontent.com".equals(host);
+                && "https".equalsIgnoreCase(uri.getScheme())
+                && "script.googleusercontent.com".equalsIgnoreCase(
+                        uri.getHost()
+                );
     }
 
     private void loadHome() {
         if (webView != null) {
+            mainFrameLoadFailed = false;
             hideError();
-            webView.setVisibility(View.VISIBLE);
             webView.loadUrl(HOME_URL);
         }
     }
@@ -238,36 +347,24 @@ public class MainActivity extends Activity {
     }
 
     private void showError(String message) {
-        lastError = message;
-
-        if (errorLayout != null && errorText != null) {
-            errorText.setText(
-                    "Website could not be opened\n\n" + lastError
-            );
-
-            if (webView != null) {
-                webView.setVisibility(View.GONE);
-            }
-
-            errorLayout.setVisibility(View.VISIBLE);
+        if (errorText == null || errorLayout == null) {
+            return;
         }
+
+        errorText.setText(message);
+        webView.setVisibility(View.GONE);
+        errorLayout.setVisibility(View.VISIBLE);
     }
 
     private void showInitialError(String message) {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER);
-        root.setPadding(32, 32, 32, 32);
-        root.setBackgroundColor(Color.WHITE);
-
         TextView messageView = new TextView(this);
         messageView.setTextColor(Color.DKGRAY);
         messageView.setTextSize(16);
         messageView.setGravity(Gravity.CENTER);
+        messageView.setPadding(32, 32, 32, 32);
         messageView.setText(message);
 
-        root.addView(messageView);
-        setContentView(root);
+        setContentView(messageView);
     }
 
     @Override
@@ -292,7 +389,9 @@ public class MainActivity extends Activity {
         super.onSaveInstanceState(outState);
 
         if (webView != null) {
-            webView.saveState(outState);
+            Bundle webState = new Bundle();
+            webView.saveState(webState);
+            outState.putBundle("webview_state", webState);
         }
     }
 
@@ -300,6 +399,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         if (webView != null) {
             webView.destroy();
+            webView = null;
         }
 
         super.onDestroy();
