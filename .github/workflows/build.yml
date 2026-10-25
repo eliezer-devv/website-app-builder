@@ -69,14 +69,17 @@ jobs:
           package = field("Package name").strip()
           icon_url = field("App icon URL (optional)").strip()
 
+          # Automatically add HTTPS if only a domain was entered.
+          if url and not re.match(r"^https?://", url, re.IGNORECASE):
+              url = "https://" + url
+
           print("Website URL received:", repr(url))
           print("App name received:", repr(name))
           print("Package name received:", repr(package))
 
-          if not re.fullmatch(r"https?://\S+", url):
+          if not re.fullmatch(r"https?://\S+", url, re.IGNORECASE):
               raise SystemExit(
-                  "Website URL must begin with http:// or https://. "
-                  f"Received: {url!r}"
+                  f"Invalid website URL: {url!r}"
               )
 
           if not name or len(name) > 60:
@@ -92,7 +95,9 @@ jobs:
                   f"Invalid Android package name: {package!r}"
               )
 
-          if icon_url and not re.fullmatch(r"https?://\S+", icon_url):
+          if icon_url and not re.fullmatch(
+              r"https?://\S+", icon_url, re.IGNORECASE
+          ):
               raise SystemExit(
                   "Icon URL must begin with http:// or https://."
               )
