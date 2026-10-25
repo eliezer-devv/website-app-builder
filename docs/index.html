@@ -91,7 +91,7 @@
 <script>
 (() => {
   // WARNING: This token will be publicly visible in this website's source.
-  const GITHUB_TOKEN = "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";
+  const GITHUB_TOKEN = "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";
   const OWNER = "eliezer-devv";
   const REPO = "website-app-builder";
   const WORKFLOW = "build.yml";
@@ -136,7 +136,7 @@
     event.preventDefault();
     download.hidden = true;
 
-    if (!GITHUB_TOKEN || GITHUB_TOKEN === "PASTE_YOUR_GITHUB_TOKEN_HERE") {
+    if (!GITHUB_TOKEN || GITHUB_TOKEN === "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") {
       setStatus("Set the GitHub token in the page code first.");
       return;
     }
