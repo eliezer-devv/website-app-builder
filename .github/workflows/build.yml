@@ -1,244 +1,145 @@
 name: Build Website APK
 
 on:
-  issues:
-    types: [opened]
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: "Website URL"
+        required: true
+        type: string
+      app_name:
+        description: "Android app name"
+        required: true
+        type: string
+      package_name:
+        description: "Android package name"
+        required: true
+        type: string
+      icon_path:
+        description: "Uploaded app icon path"
+        required: true
+        type: string
+      request_id:
+        description: "Unique build ID"
+        required: true
+        type: string
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
 
 jobs:
   build:
-    if: >-
-      github.event.issue.user.login == github.repository_owner &&
-      github.event.issue.title == 'Build a website APK'
-
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Check out submitted build
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: "8.9"
 
-      - name: Install image tools
-        run: python3 -m pip install --quiet Pillow
-
-      - name: Read build request and configure app
-        shell: bash
+      - name: Validate inputs and configure app
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
+          APP_NAME: ${{ inputs.app_name }}
+          PACKAGE_NAME: ${{ inputs.package_name }}
+          ICON_PATH: ${{ inputs.icon_path }}
+          REQUEST_ID: ${{ inputs.request_id }}
         run: |
-          python3 <<'PY'
-          import json
-          import re
+          set -euo pipefail
+
+          python3 - <<'PY'
           import os
-          from pathlib import Path
+          import re
+          from urllib.parse import urlparse
 
-          event_path = os.environ["GITHUB_EVENT_PATH"]
-          event = json.loads(Path(event_path).read_text(encoding="utf-8"))
-          body = event.get("issue", {}).get("body") or ""
+          url = os.environ["WEBSITE_URL"]
+          parsed = urlparse(url)
 
-          def field(label):
-              pattern = (
-                  r"(?ms)^###\s+" + re.escape(label) +
-                  r"\s*\n(.*?)(?=^###\s+|\Z)"
-              )
-              match = re.search(pattern, body)
+          if parsed.scheme not in ("http", "https") or not parsed.netloc:
+              raise SystemExit("Invalid website URL")
 
-              if not match:
-                  raise SystemExit(
-                      f"Could not find form field: {label}\n"
-                      f"Received issue body:\n{body}"
-                  )
-
-              value = match.group(1).strip()
-
-              if value == "_No response_":
-                  return ""
-
-              return value
-
-          url = field("Website URL").strip()
-          name = field("App name").strip()
-          package = field("Package name").strip()
-          icon_url = field("App icon URL (optional)").strip()
-
-          if url and not re.match(r"^https?://", url, re.IGNORECASE):
-              url = "https://" + url
-
-          print("Website URL received:", repr(url))
-          print("App name received:", repr(name))
-          print("Package name received:", repr(package))
-          print("Custom icon provided:", bool(icon_url))
-
-          if not re.fullmatch(r"https?://\S+", url, re.IGNORECASE):
-              raise SystemExit(f"Invalid website URL: {url!r}")
-
-          if not name or len(name) > 60:
-              raise SystemExit(
-                  "App name must contain between 1 and 60 characters."
-              )
-
+          package = os.environ["PACKAGE_NAME"]
           if not re.fullmatch(
               r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+",
               package
           ):
-              raise SystemExit(
-                  f"Invalid Android package name: {package!r}"
-              )
+              raise SystemExit("Invalid Android package name")
 
-          if icon_url and not re.fullmatch(
-              r"https?://\S+", icon_url, re.IGNORECASE
-          ):
-              raise SystemExit(
-                  "Icon URL must begin with http:// or https://."
-              )
+          name = os.environ["APP_NAME"].strip()
+          if not name or len(name) > 40 or "\n" in name:
+              raise SystemExit("Invalid app name")
 
-          def escape_property(value):
-              result = []
+          if not re.fullmatch(r"[A-Za-z0-9._/-]+", os.environ["ICON_PATH"]):
+              raise SystemExit("Invalid icon path")
 
-              for char in value:
-                  code = ord(char)
-
-                  if char == "\\":
-                      result.append("\\\\")
-                  elif char == "\n":
-                      result.append("\\n")
-                  elif char == "\r":
-                      result.append("\\r")
-                  elif char in "=:# !":
-                      result.append("\\" + char)
-                  elif code > 0xFFFF:
-                      code -= 0x10000
-                      result.append(
-                          "\\u%04X\\u%04X" % (
-                              0xD800 + (code >> 10),
-                              0xDC00 + (code & 0x3FF)
-                          )
-                      )
-                  elif code > 0x7E:
-                      result.append(f"\\u{code:04X}")
-                  else:
-                      result.append(char)
-
-              return "".join(result)
-
-          config = (
-              "package_name=" + escape_property(package) + "\n" +
-              "app_name=" + escape_property(name) + "\n" +
-              "home_url=" + escape_property(url) + "\n"
-          )
-
-          Path("app-config.properties").write_text(
-              config, encoding="ascii"
-          )
-
-          Path("icon-url.txt").write_text(icon_url, encoding="utf-8")
-
-          print("App configuration created successfully.")
+          if not re.fullmatch(r"[0-9]+", os.environ["REQUEST_ID"]):
+              raise SystemExit("Invalid build ID")
           PY
 
-      - name: Download and validate optional app icon
-        shell: bash
+          test -f "$ICON_PATH" || {
+            echo "Uploaded icon was not found: $ICON_PATH"
+            exit 1
+          }
+
+          {
+            printf 'package_name=%s\n' "$PACKAGE_NAME"
+            printf 'app_name=%s\n' "$APP_NAME"
+            printf 'home_url=%s\n' "$WEBSITE_URL"
+          } > app-config.properties
+
+      - name: Generate app icons
         run: |
           set -euo pipefail
-
-          ICON_URL="$(cat icon-url.txt)"
-
-          # Do not accidentally reuse an old icon.
-          rm -f webapp-icon.png icon-download.tmp
-
-          if [ -z "$ICON_URL" ]; then
-            echo "No custom icon provided; using the template icon."
-            exit 0
-          fi
-
-          echo "Downloading custom app icon..."
-
-          if ! curl \
-            --fail \
-            --location \
-            --silent \
-            --show-error \
-            --max-time 45 \
-            --max-filesize 10485760 \
-            --user-agent "WebsiteAppBuilder/1.0" \
-            "$ICON_URL" \
-            --output icon-download.tmp; then
-            echo "::error::Icon download failed. Check that the URL is publicly accessible and points directly to an image."
-            exit 1
-          fi
-
-          python3 <<'PY'
-          from pathlib import Path
-          from PIL import Image, UnidentifiedImageError
-          import sys
-
-          source = Path("icon-download.tmp")
-          output = Path("webapp-icon.png")
-
-          if not source.exists() or source.stat().st_size == 0:
-              sys.exit(
-                  "Icon download was empty. Please provide a direct, "
-                  "publicly accessible image URL."
-              )
-
-          try:
-              with Image.open(source) as image:
-                  image_format = image.format
-                  image.verify()
-
-              # Reopen after verify; verify() invalidates normal image reading.
-              with Image.open(source) as image:
-                  image.load()
-
-                  if image.width < 1 or image.height < 1:
-                      raise ValueError("Image has invalid dimensions.")
-
-                  if image.width > 10000 or image.height > 10000:
-                      raise ValueError(
-                          "Image dimensions are too large; maximum is "
-                          "10000 x 10000 pixels."
-                      )
-
-                  image = image.convert("RGBA")
-                  image.save(output, format="PNG", optimize=True)
-
-              print(
-                  f"Icon validated and converted to PNG "
-                  f"(original format: {image_format})."
-              )
-
-          except (UnidentifiedImageError, OSError, ValueError) as error:
-              sys.exit(
-                  "The icon URL did not provide a valid, supported image. "
-                  "It may point to a webpage instead of an image, require "
-                  "sign-in, or contain a damaged/unsupported file. "
-                  f"Details: {error}"
-              )
-          PY
-
-          rm -f icon-download.tmp
-
-      - name: Generate launcher icons
-        run: python3 scripts/generate_icons.py
+          cp "${{ inputs.icon_path }}" webapp-icon.png
+          python3 -m pip install --user Pillow
+          python3 scripts/generate_icons.py
 
       - name: Build APK
         run: gradle assembleDebug
 
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: website-app-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          APP_NAME: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK" || {
+            echo "APK was not created at $APK"
+            find app/build/outputs -type f -name '*.apk' || true
+            exit 1
+          }
+
+          TAG="build-${REQUEST_ID}"
+
+          gh release create "$TAG" "$APK" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "${APP_NAME} APK" \
+            --notes "Website wrapper APK built from the Website APK Builder form."
+
+      - name: Delete temporary icon branch
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$BRANCH_NAME" == web-build-* ]]; then
+            gh api \
+              --method DELETE \
+              "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH_NAME}" \
+              || echo "Temporary branch cleanup failed."
+          fi
