@@ -56,13 +56,12 @@ public class MainActivity extends Activity {
         }
 
         buildLayout();
-        configureWebView();
+        createWebView();
 
         if (savedInstanceState != null) {
             Bundle webState = savedInstanceState.getBundle("webview_state");
 
-            if (webState == null
-                    || webView.restoreState(webState) == null) {
+            if (webState == null || webView.restoreState(webState) == null) {
                 loadHome();
             }
         } else {
@@ -75,14 +74,6 @@ public class MainActivity extends Activity {
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setBackgroundColor(Color.WHITE);
 
-        webView = new WebView(this);
-
-        rootLayout.addView(webView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
-        ));
-
         errorLayout = new LinearLayout(this);
         errorLayout.setOrientation(LinearLayout.VERTICAL);
         errorLayout.setGravity(Gravity.CENTER);
@@ -94,14 +85,26 @@ public class MainActivity extends Activity {
         errorText.setTextColor(Color.DKGRAY);
         errorText.setTextSize(16);
         errorText.setGravity(Gravity.CENTER);
-
         errorLayout.addView(errorText);
 
         Button retryButton = new Button(this);
         retryButton.setText("Try again");
         retryButton.setOnClickListener(v -> loadHome());
-
         errorLayout.addView(retryButton);
+
+        setContentView(rootLayout);
+    }
+
+    private void createWebView() {
+        webView = new WebView(this);
+
+        rootLayout.removeAllViews();
+
+        rootLayout.addView(webView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1
+        ));
 
         rootLayout.addView(errorLayout, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -109,10 +112,6 @@ public class MainActivity extends Activity {
                 1
         ));
 
-        setContentView(rootLayout);
-    }
-
-    private void configureWebView() {
         WebSettings settings = webView.getSettings();
 
         settings.setJavaScriptEnabled(true);
@@ -124,10 +123,8 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            // Allow HTTPS websites to load mixed-content resources
-            // according to WebView's compatibility rules.
             settings.setMixedContentMode(
-                    WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    WebSettings.MIXED_CONTENT_NEVER_ALLOW
             );
 
             CookieManager.getInstance()
@@ -143,35 +140,15 @@ public class MainActivity extends Activity {
                     WebView view,
                     WebResourceRequest request
             ) {
-                Uri uri = request.getUrl();
-
-                // Allow resources and embedded frames from other domains.
-                // This includes scripts, stylesheets, images, fonts,
-                // APIs and embedded media.
+                // Embedded resources may load from other domains.
+                // Only restrict navigation of the main page.
                 if (!request.isForMainFrame()) {
                     return false;
                 }
 
-                // Allow normal navigation within the original website.
-                if (isOriginalSite(uri)) {
-                    return false;
-                }
-
-                // Allow cross-domain redirects, which some sites need
-                // to complete forms and open their web applications.
-                // Ordinary clicks to unrelated sites remain blocked.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
-                        && request.isRedirect()) {
-                    return false;
-                }
-
-                // Permit the standard Google Apps Script redirect.
-                if (isGoogleAppsScriptRedirect(uri)) {
-                    return false;
-                }
-
-                // Block other top-level navigation away from the site.
-                return true;
+                // Main-frame navigation must stay on the original domain
+                // or one of its subdomains. Redirects get no exception.
+                return !isOriginalSite(request.getUrl());
             }
 
             @SuppressWarnings("deprecation")
@@ -180,16 +157,9 @@ public class MainActivity extends Activity {
                     WebView view,
                     String url
             ) {
-                Uri uri = Uri.parse(url);
-
-                if (isOriginalSite(uri)
-                        || isGoogleAppsScriptRedirect(uri)) {
-                    return false;
-                }
-
-                // Older Android versions do not expose redirect
-                // information in this callback. Keep the site restriction.
-                return true;
+                // Older Android versions do not expose isForMainFrame()
+                // in this callback, so apply the domain rule here.
+                return !isOriginalSite(Uri.parse(url));
             }
 
             @Override
@@ -204,8 +174,6 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                // Do not hide a main-frame error just because WebView
-                // subsequently reports that the failed page finished.
                 if (!mainFrameLoadFailed) {
                     hideError();
                 }
@@ -274,25 +242,10 @@ public class MainActivity extends Activity {
                     WebView view,
                     RenderProcessGoneDetail detail
             ) {
-                // Recreate the WebView if its rendering process crashes.
-                if (webView != null) {
-                    rootLayout.removeView(webView);
-                    webView.destroy();
-                }
+                rootLayout.removeView(view);
+                view.destroy();
 
-                webView = new WebView(MainActivity.this);
-
-                rootLayout.addView(
-                        webView,
-                        0,
-                        new LinearLayout.LayoutParams(
-                                LinearLayout.LayoutParams.MATCH_PARENT,
-                                0,
-                                1
-                        )
-                );
-
-                configureWebView();
+                createWebView();
                 loadHome();
 
                 return true;
@@ -305,27 +258,19 @@ public class MainActivity extends Activity {
             return false;
         }
 
+        // Only HTTPS pages are allowed in the main frame.
         if (!"https".equalsIgnoreCase(uri.getScheme())) {
             return false;
         }
 
         String host = uri.getHost().toLowerCase(Locale.ROOT);
 
-        // Exact host or a genuine subdomain.
-        return host.equals(allowedHost)
-                || host.endsWith("." + allowedHost);
-    }
-
-    private boolean isGoogleAppsScriptRedirect(Uri uri) {
-        if (uri == null || uri.getHost() == null) {
-            return false;
+        if (host.startsWith("www.")) {
+            host = host.substring(4);
         }
 
-        return "script.google.com".equals(allowedHost)
-                && "https".equalsIgnoreCase(uri.getScheme())
-                && "script.googleusercontent.com".equalsIgnoreCase(
-                        uri.getHost()
-                );
+        return host.equals(allowedHost)
+                || host.endsWith("." + allowedHost);
     }
 
     private void loadHome() {
@@ -347,7 +292,7 @@ public class MainActivity extends Activity {
     }
 
     private void showError(String message) {
-        if (errorText == null || errorLayout == null) {
+        if (errorText == null || errorLayout == null || webView == null) {
             return;
         }
 
