@@ -1,125 +1,343 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10131c">
   <title>Website to APK Builder</title>
   <style>
     * { box-sizing: border-box; }
-
     body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      background: #10131c;
-      color: #f4f6fb;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0; padding: 24px 14px; background: #10131a;
+      color: #f1f4fa; font-family: system-ui, sans-serif;
     }
-
     main {
-      width: 100%;
-      max-width: 520px;
-      padding: 34px;
-      border: 1px solid #2c3345;
-      border-radius: 20px;
-      background: #191e2b;
-      box-shadow: 0 20px 70px #0005;
+      max-width: 540px; margin: 25px auto; padding: 25px;
+      background: #1b202b; border: 1px solid #343c4d;
+      border-radius: 18px;
     }
-
-    .logo {
-      display: grid;
-      place-items: center;
-      width: 58px;
-      height: 58px;
-      margin-bottom: 24px;
-      border-radius: 16px;
-      background: #303dff;
-      font-size: 29px;
-      font-weight: 800;
+    h1 { margin-top: 0; font-size: 27px; }
+    .sub { color: #b4bed0; line-height: 1.5; }
+    label { display: block; margin-top: 18px; font-weight: 650; }
+    input {
+      display: block; width: 100%; margin-top: 7px; padding: 12px;
+      border-radius: 9px; border: 1px solid #465169;
+      background: #101520; color: white; font: inherit;
     }
-
-    h1 {
-      margin: 0 0 12px;
-      font-size: clamp(28px, 7vw, 38px);
-      line-height: 1.15;
+    input[type=file] { padding: 9px; }
+    button, .download {
+      display: block; width: 100%; margin-top: 22px; padding: 14px;
+      border: 0; border-radius: 10px; background: #70a5ff;
+      color: #081326; font: inherit; font-weight: 750;
+      text-align: center; cursor: pointer; text-decoration: none;
     }
-
-    p {
-      color: #b9c1d3;
-      line-height: 1.65;
+    button:disabled { opacity: .55; cursor: wait; }
+    .secondary { background: #30394a; color: white; }
+    #status {
+      margin-top: 20px; padding: 13px; border-radius: 9px;
+      background: #111722; line-height: 1.5; overflow-wrap: anywhere;
     }
-
-    a.button {
-      display: block;
-      margin-top: 26px;
-      padding: 15px 20px;
-      border-radius: 12px;
-      background: #5965ff;
-      color: white;
-      font-weight: 700;
-      text-align: center;
-      text-decoration: none;
-    }
-
-    a.button:hover { background: #707aff; }
-
-    .steps {
-      margin-top: 28px;
-      padding-top: 22px;
-      border-top: 1px solid #303749;
-    }
-
-    .steps h2 {
-      font-size: 16px;
-      margin: 0 0 12px;
-    }
-
-    ol {
-      padding-left: 22px;
-      color: #b9c1d3;
-      line-height: 1.8;
-    }
-
-    .note {
-      margin-top: 20px;
-      font-size: 13px;
-      color: #929db4;
-    }
+    .small { font-size: 13px; color: #aeb8ca; line-height: 1.5; }
+    .hidden { display: none !important; }
+    a { color: #9fc2ff; }
   </style>
 </head>
 <body>
-  <main>
-    <div class="logo" aria-hidden="true">APK</div>
+<main>
+  <h1>Website to APK Builder</h1>
+  <p class="sub">Turn a website into an installable Android app. Enter your details, choose an icon, and build your APK.</p>
 
-    <h1>Website to APK Builder</h1>
-    <p>
-      Turn a website into an Android app. Choose the website,
-      set the app name and package name, and optionally provide
-      an app icon.
-    </p>
+  <form id="builder">
+    <label for="website">Website URL</label>
+    <input id="website" type="url" placeholder="https://example.com"
+           required>
 
-    <a class="button"
-       href="https://github.com/eliezer-devv/website-app-builder/issues/new?template=build-apk.yml">
-      Build APK
-    </a>
+    <label for="appName">App name</label>
+    <input id="appName" maxlength="50" placeholder="My Website"
+           required>
 
-    <section class="steps">
-      <h2>How it works</h2>
-      <ol>
-        <li>Enter your app details in the form.</li>
-        <li>Submit the form to start the build.</li>
-        <li>Open the build in GitHub Actions when it finishes.</li>
-        <li>Download the <strong>website-app-apk</strong> artifact.</li>
-      </ol>
-    </section>
+    <label for="packageName">Android package name</label>
+    <input id="packageName" maxlength="180"
+           placeholder="com.example.mywebsite" required>
+    <p class="small">Use lowercase letters, numbers and dots. Each section must start with a letter.</p>
 
-    <p class="note">
-      Builds run through GitHub Actions. The APK artifact is available
-      for 14 days after the build finishes.
-    </p>
-  </main>
+    <label for="appIcon">App icon (optional)</label>
+    <input id="appIcon" type="file" accept="image/png,image/jpeg,image/webp">
+    <p class="small">Choose an image from your phone. It will be cropped to a square for the app icon.</p>
+
+    <button id="buildButton" type="submit">Build APK</button>
+  </form>
+
+  <div id="status" role="status" aria-live="polite">Ready to build.</div>
+  <a id="download" class="download hidden" href="#" target="_blank" rel="noopener">Download APK</a>
+  <a id="runLink" class="download secondary hidden" href="#" target="_blank" rel="noopener">View build details</a>
+
+  <p class="small">
+    Builds run on GitHub Actions. The finished APK is published as a GitHub Release.
+    Do not enter sensitive information into the website being wrapped.
+  </p>
+</main>
+
+<script>
+"use strict";
+
+/*
+ * Replace the placeholder below with your fine-grained GitHub token.
+ * WARNING: This public page exposes the token to every visitor.
+ */
+const GITHUB_TOKEN = "PASTE_YOUR_GITHUB_TOKEN_HERE";
+const OWNER = "eliezer-devv";
+const REPO = "website-app-builder";
+const WORKFLOW = "build.yml";
+
+const form = document.getElementById("builder");
+const button = document.getElementById("buildButton");
+const statusBox = document.getElementById("status");
+const download = document.getElementById("download");
+const runLink = document.getElementById("runLink");
+
+function setStatus(message) {
+  statusBox.textContent = message;
+}
+
+function apiHeaders() {
+  return {
+    "Accept": "application/vnd.github+json",
+    "Authorization": `Bearer ${GITHUB_TOKEN}`,
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}${path}`, {
+    ...options,
+    headers: {
+      ...apiHeaders(),
+      ...(options.headers || {})
+    }
+  });
+
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body.message || "";
+    } catch (_) {}
+    throw new Error(`GitHub API error (${response.status})${detail ? ": " + detail : ""}`);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+function validateInputs(url, appName, packageName) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_) {
+    throw new Error("Enter a valid website URL.");
+  }
+
+  if (!["https:", "http:"].includes(parsed.protocol)) {
+    throw new Error("The website URL must begin with http:// or https://.");
+  }
+
+  if (!appName.trim()) throw new Error("Enter an app name.");
+
+  if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageName)) {
+    throw new Error("Invalid package name. Example: com.example.mywebsite");
+  }
+}
+
+async function makeSquarePng(file) {
+  if (!file) return null;
+  if (file.size > 8 * 1024 * 1024) {
+    throw new Error("The selected image is over 8 MB. Choose a smaller image.");
+  }
+
+  const image = new Image();
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("Could not read that image."));
+      image.src = objectUrl;
+    });
+
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    if (!side) throw new Error("The image has invalid dimensions.");
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+
+    const context = canvas.getContext("2d");
+    const x = (image.naturalWidth - side) / 2;
+    const y = (image.naturalHeight - side) / 2;
+    context.drawImage(image, x, y, side, side, 0, 0, 512, 512);
+
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("Could not convert the image to PNG.");
+    if (blob.size > 4 * 1024 * 1024) {
+      throw new Error("The converted icon is too large. Choose a simpler image.");
+    }
+
+    const buffer = await blob.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function waitForBuild(branch, requestId) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  let run = null;
+
+  while (Date.now() < deadline) {
+    const data = await api("/actions/runs?branch=" +
+      encodeURIComponent(branch) +
+      "&event=workflow_dispatch&per_page=20");
+
+    run = data.workflow_runs.find(r =>
+      r.head_branch === branch &&
+      r.name === "Build Website APK"
+    );
+
+    if (run) break;
+    setStatus("Request submitted. Waiting for GitHub to start the build…");
+    await new Promise(resolve => setTimeout(resolve, 4000));
+  }
+
+  if (!run) {
+    throw new Error("The build did not start in time. Check GitHub Actions.");
+  }
+
+  runLink.href = run.html_url;
+  runLink.classList.remove("hidden");
+
+  while (Date.now() < deadline) {
+    const current = await api(`/actions/runs/${run.id}`);
+    runLink.href = current.html_url;
+
+    if (current.status === "completed") {
+      if (current.conclusion !== "success") {
+        throw new Error("The build failed. Open 'View build details' for the error.");
+      }
+
+      setStatus("Build completed! Finding your APK…");
+
+      const tag = `build-${requestId}`;
+      const release = await api(`/releases/tags/${tag}`);
+      const asset = release.assets.find(a => a.name.endsWith(".apk"));
+
+      if (!asset) {
+        throw new Error("Build succeeded, but the APK release asset was not found.");
+      }
+
+      download.href = asset.browser_download_url;
+      download.classList.remove("hidden");
+      setStatus("Your APK is ready. Tap Download APK.");
+      return;
+    }
+
+    setStatus(`Building your APK… (${current.status})`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
+  throw new Error("The build is taking longer than expected. Check build details.");
+}
+
+form.addEventListener("submit", async event => {
+  event.preventDefault();
+  download.classList.add("hidden");
+  runLink.classList.add("hidden");
+
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === "PASTE_YOUR_GITHUB_TOKEN_HERE") {
+    setStatus("Add your GitHub token to the GITHUB_TOKEN line in this file first.");
+    return;
+  }
+
+  const url = document.getElementById("website").value.trim();
+  const appName = document.getElementById("appName").value.trim();
+  const packageName = document.getElementById("packageName").value.trim();
+  const file = document.getElementById("appIcon").files[0];
+
+  button.disabled = true;
+
+  try {
+    validateInputs(url, appName, packageName);
+    setStatus("Preparing your request…");
+
+    const requestId = crypto.randomUUID().replaceAll("-", "");
+    const branch = `build-request-${requestId}`;
+
+    let iconBase64 = null;
+    if (file) {
+      setStatus("Preparing your icon…");
+      iconBase64 = await makeSquarePng(file);
+    }
+
+    const repoInfo = await api("");
+    const defaultBranch = repoInfo.default_branch;
+    const ref = await api(`/git/ref/heads/${encodeURIComponent(defaultBranch)}`);
+    const baseSha = ref.object.sha;
+
+    setStatus("Preparing a temporary build branch…");
+    await api("/git/refs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ref: `refs/heads/${branch}`,
+        sha: baseSha
+      })
+    });
+
+    let iconPath = "";
+
+    if (iconBase64) {
+      iconPath = `build-inputs/${requestId}/webapp-icon.png`;
+      setStatus("Uploading your icon to the temporary build branch…");
+
+      await api(`/contents/${iconPath.split("/").map(encodeURIComponent).join("/")}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: `Add temporary icon for build ${requestId}`,
+          content: iconBase64,
+          branch
+        })
+      });
+    }
+
+    setStatus("Submitting your build to GitHub Actions…");
+
+    await api(`/actions/workflows/${WORKFLOW}/dispatches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ref: branch,
+        inputs: {
+          website_url: url,
+          app_name: appName,
+          package_name: packageName,
+          icon_path: iconPath,
+          request_id: requestId
+        }
+      })
+    });
+
+    await waitForBuild(branch, requestId);
+  } catch (error) {
+    setStatus(error.message || "Something went wrong. Please try again.");
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
 </body>
 </html>
