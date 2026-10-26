@@ -1,6 +1,8 @@
 package com.websitewrapper.app;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -18,7 +20,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.Locale;
 
@@ -30,6 +34,7 @@ public class MainActivity extends Activity {
     private LinearLayout rootLayout;
     private LinearLayout errorLayout;
     private TextView errorText;
+    private Button copyButton;
 
     private String allowedHost;
     private boolean mainFrameLoadFailed = false;
@@ -83,15 +88,32 @@ public class MainActivity extends Activity {
         errorLayout = new LinearLayout(this);
         errorLayout.setOrientation(LinearLayout.VERTICAL);
         errorLayout.setGravity(Gravity.CENTER);
-        errorLayout.setPadding(32, 32, 32, 32);
+        errorLayout.setPadding(24, 24, 24, 24);
         errorLayout.setBackgroundColor(Color.WHITE);
         errorLayout.setVisibility(View.GONE);
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(false);
 
         errorText = new TextView(this);
         errorText.setTextColor(Color.DKGRAY);
         errorText.setTextSize(16);
         errorText.setGravity(Gravity.CENTER);
-        errorLayout.addView(errorText);
+        errorText.setTextIsSelectable(true);
+        errorText.setText("Website diagnostic information will appear here.");
+
+        scrollView.addView(errorText);
+
+        errorLayout.addView(scrollView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1
+        ));
+
+        copyButton = new Button(this);
+        copyButton.setText("Copy diagnostic details");
+        copyButton.setOnClickListener(v -> copyDiagnostics());
+        errorLayout.addView(copyButton);
 
         Button retryButton = new Button(this);
         retryButton.setText("Try again");
@@ -147,8 +169,7 @@ public class MainActivity extends Activity {
                     WebResourceRequest request
             ) {
                 if (!request.isForMainFrame()) {
-                    // Images, scripts, styles and other embedded resources
-                    // can load from their own domains.
+                    // Allow embedded resources to load from other domains.
                     return false;
                 }
 
@@ -205,10 +226,15 @@ public class MainActivity extends Activity {
                     mainFrameLoadFailed = true;
 
                     showError(
-                            "The website could not be loaded.\n\n"
-                                    + "Error: " + error.getDescription()
-                                    + "\n\nAddress:\n"
+                            "The website could not be loaded."
+                                    + "\n\nError code: "
+                                    + error.getErrorCode()
+                                    + "\nDescription: "
+                                    + error.getDescription()
+                                    + "\n\nFailing address:\n"
                                     + request.getUrl()
+                                    + "\n\nConfigured website:\n"
+                                    + HOME_URL
                     );
                 }
             }
@@ -225,10 +251,12 @@ public class MainActivity extends Activity {
                     mainFrameLoadFailed = true;
 
                     showError(
-                            "The website could not be loaded.\n\n"
-                                    + "Error: " + description
-                                    + "\n\nAddress:\n"
-                                    + failingUrl
+                            "The website could not be loaded."
+                                    + "\n\nError code: " + errorCode
+                                    + "\nDescription: " + description
+                                    + "\n\nFailing address:\n" + failingUrl
+                                    + "\n\nConfigured website:\n"
+                                    + HOME_URL
                     );
                 }
             }
@@ -244,11 +272,15 @@ public class MainActivity extends Activity {
                     mainFrameLoadFailed = true;
 
                     showError(
-                            "The website returned an HTTP error.\n\n"
-                                    + "Status: "
+                            "The website returned an HTTP error."
+                                    + "\n\nHTTP status: "
                                     + response.getStatusCode()
-                                    + "\n\nAddress:\n"
+                                    + "\nReason: "
+                                    + response.getReasonPhrase()
+                                    + "\n\nFailing address:\n"
                                     + request.getUrl()
+                                    + "\n\nConfigured website:\n"
+                                    + HOME_URL
                     );
                 }
             }
@@ -258,11 +290,20 @@ public class MainActivity extends Activity {
                     WebView view,
                     RenderProcessGoneDetail detail
             ) {
+                showError(
+                        "The website renderer stopped unexpectedly."
+                                + "\n\nDid crash: "
+                                + detail.didCrash()
+                                + "\nRenderer priority at exit: "
+                                + detail.rendererPriorityAtExit()
+                                + "\n\nConfigured website:\n"
+                                + HOME_URL
+                                + "\n\nTap Try again to reload."
+                );
+
                 rootLayout.removeView(view);
                 view.destroy();
-
-                createWebView();
-                loadHome();
+                webView = null;
 
                 return true;
             }
@@ -274,14 +315,14 @@ public class MainActivity extends Activity {
             return false;
         }
 
-        // Main-page navigation must use HTTPS.
+        // Only HTTPS pages are permitted as the main page.
         if (!"https".equalsIgnoreCase(uri.getScheme())) {
             return false;
         }
 
         String host = normalizeHost(uri.getHost());
 
-        // Allow only the configured domain and its subdomains.
+        // Permit the configured domain and its subdomains only.
         return host.equals(allowedHost)
                 || host.endsWith("." + allowedHost);
     }
@@ -290,23 +331,29 @@ public class MainActivity extends Activity {
         mainFrameLoadFailed = true;
 
         showError(
-                "Navigation was blocked by this app's website restriction."
-                        + "\n\nThe website tried to open:\n"
+                "NAVIGATION BLOCKED"
+                        + "\n\nThe website tried to open an address "
+                        + "outside the permitted domain."
+                        + "\n\nBlocked address:\n"
                         + target
-                        + "\n\nThe app currently allows only:\n"
+                        + "\n\nPermitted domain:\n"
                         + allowedHost
-                        + "\n\nIf this is a legitimate redirect required "
-                        + "by the website, the restriction may need to be "
-                        + "adjusted."
+                        + "\n\nConfigured website:\n"
+                        + HOME_URL
+                        + "\n\nThis may be a legitimate redirect "
+                        + "required by the website. The app has not "
+                        + "automatically allowed it."
         );
     }
 
     private void loadHome() {
-        if (webView != null) {
-            mainFrameLoadFailed = false;
-            hideError();
-            webView.loadUrl(HOME_URL);
+        if (webView == null) {
+            createWebView();
         }
+
+        mainFrameLoadFailed = false;
+        hideError();
+        webView.loadUrl(HOME_URL);
     }
 
     private void hideError() {
@@ -320,13 +367,49 @@ public class MainActivity extends Activity {
     }
 
     private void showError(String message) {
-        if (errorText == null || errorLayout == null || webView == null) {
+        if (errorText == null || errorLayout == null) {
             return;
         }
 
         errorText.setText(message);
-        webView.setVisibility(View.GONE);
+        copyButton.setText("Copy diagnostic details");
+
+        if (webView != null) {
+            webView.setVisibility(View.GONE);
+        }
+
         errorLayout.setVisibility(View.VISIBLE);
+    }
+
+    private void copyDiagnostics() {
+        ClipboardManager clipboard =
+                (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+
+        if (clipboard == null) {
+            Toast.makeText(
+                    this,
+                    "Could not access clipboard. Please select and copy the text.",
+                    Toast.LENGTH_LONG
+            ).show();
+            return;
+        }
+
+        String details = errorText.getText().toString();
+
+        ClipData clip = ClipData.newPlainText(
+                "Website app diagnostics",
+                details
+        );
+
+        clipboard.setPrimaryClip(clip);
+
+        copyButton.setText("Copied!");
+
+        Toast.makeText(
+                this,
+                "Diagnostic details copied. Paste them into ChatGPT.",
+                Toast.LENGTH_LONG
+        ).show();
     }
 
     private void showInitialError(String message) {
@@ -335,6 +418,7 @@ public class MainActivity extends Activity {
         messageView.setTextSize(16);
         messageView.setGravity(Gravity.CENTER);
         messageView.setPadding(32, 32, 32, 32);
+        messageView.setTextIsSelectable(true);
         messageView.setText(message);
 
         setContentView(messageView);
