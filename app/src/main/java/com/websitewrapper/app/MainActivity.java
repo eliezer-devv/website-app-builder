@@ -300,7 +300,8 @@ public class MainActivity extends Activity {
             }
         });
 
-        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
+        webView.setDownloadListener((url, userAgent, contentDisposition,
+                                     mimeType, contentLength) ->
                 downloadFile(url, userAgent, contentDisposition, mimeType));
 
         webView.setWebViewClient(new WebViewClient() {
@@ -523,20 +524,25 @@ public class MainActivity extends Activity {
         }
     }
 
+    /*
+     * Opens the website's file picker and adds a camera option.
+     * Keeps the MIME type and accepted file types requested by the website.
+     */
     private void openFileChooser(WebChromeClient.FileChooserParams params) {
         Intent contentIntent;
 
         try {
             contentIntent = params.createIntent();
             contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-            contentIntent.setType("*/*");
         } catch (Exception e) {
             contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
             contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
             contentIntent.setType("*/*");
         }
 
-        Intent cameraIntent = createCameraIntent();
+        // A camera option is relevant for image uploads.
+        boolean acceptsImages = acceptsImages(params);
+        Intent cameraIntent = acceptsImages ? createCameraIntent() : null;
 
         try {
             if (cameraIntent != null) {
@@ -546,6 +552,7 @@ public class MainActivity extends Activity {
                         "Choose a file or take a picture");
                 chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS,
                         new Intent[]{cameraIntent});
+
                 startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
             } else {
                 startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
@@ -558,35 +565,94 @@ public class MainActivity extends Activity {
                 startActivityForResult(fallback, REQUEST_FILE_CHOOSER);
             } catch (ActivityNotFoundException ignored) {
                 finishFileChooser(null);
+                cameraPhotoUri = null;
                 Toast.makeText(this, "No file picker is available.",
                         Toast.LENGTH_LONG).show();
             }
         }
     }
 
+    private boolean acceptsImages(WebChromeClient.FileChooserParams params) {
+        if (params == null) return true;
+
+        String[] types = params.getAcceptTypes();
+        if (types == null || types.length == 0) return true;
+
+        boolean hasRecognizedType = false;
+
+        for (String type : types) {
+            if (type == null || type.trim().isEmpty()) continue;
+
+            for (String part : type.split(",")) {
+                String mime = part.trim().toLowerCase(Locale.ROOT);
+
+                if (mime.isEmpty()) continue;
+                hasRecognizedType = true;
+
+                if (mime.equals("*/*")
+                        || mime.equals("image/*")
+                        || mime.startsWith("image/")) {
+                    return true;
+                }
+            }
+        }
+
+        // If the website supplies no usable MIME types, keep camera available.
+        return !hasRecognizedType;
+    }
+
     private Intent createCameraIntent() {
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
-        if (intent.resolveActivity(getPackageManager()) == null) return null;
+        if (intent.resolveActivity(getPackageManager()) == null) {
+            cameraPhotoUri = null;
+            return null;
+        }
 
         try {
             File directory = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-            if (directory == null) return intent;
 
-            if (!directory.exists() && !directory.mkdirs()) return intent;
+            if (directory == null) {
+                cameraPhotoUri = null;
+                return null;
+            }
 
-            File photo = File.createTempFile("website_photo_", ".jpg", directory);
+            if (!directory.exists() && !directory.mkdirs()) {
+                cameraPhotoUri = null;
+                return null;
+            }
+
+            File photo = File.createTempFile(
+                    "website_photo_", ".jpg", directory);
+
             cameraPhotoUri = FileProvider.getUriForFile(
                     this, getPackageName() + ".fileprovider", photo);
 
             intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            intent.setClipData(ClipData.newRawUri("camera_photo", cameraPhotoUri));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
 
+            // Some camera apps need an explicit URI grant.
+            List<android.content.pm.ResolveInfo> cameraActivities =
+                    getPackageManager().queryIntentActivities(
+                            intent, PackageManager.MATCH_DEFAULT_ONLY);
+
+            for (android.content.pm.ResolveInfo info : cameraActivities) {
+                if (info.activityInfo != null) {
+                    grantUriPermission(
+                            info.activityInfo.packageName,
+                            cameraPhotoUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                }
+            }
+
             return intent;
+
         } catch (IOException | IllegalArgumentException e) {
             cameraPhotoUri = null;
-            return intent;
+            return null;
         }
     }
 
@@ -598,14 +664,33 @@ public class MainActivity extends Activity {
             Uri[] results = null;
 
             if (resultCode == RESULT_OK) {
+                Uri selectedUri = null;
+
                 if (data != null && data.getData() != null) {
-                    results = new Uri[]{data.getData()};
+                    selectedUri = data.getData();
                 } else if (cameraPhotoUri != null) {
-                    results = new Uri[]{cameraPhotoUri};
+                    // Most camera apps return no data URI when EXTRA_OUTPUT is used.
+                    selectedUri = cameraPhotoUri;
+                }
+
+                if (selectedUri != null) {
+                    results = new Uri[]{selectedUri};
                 }
             }
 
             finishFileChooser(results);
+
+            if (cameraPhotoUri != null) {
+                try {
+                    revokeUriPermission(
+                            cameraPhotoUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                } catch (Exception ignored) {
+                    // The temporary URI grant may already have been revoked.
+                }
+            }
+
             cameraPhotoUri = null;
         }
     }
