@@ -6,6 +6,7 @@
   <title>Website APK Builder</title>
   <style>
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       padding: 24px 16px;
@@ -13,6 +14,7 @@
       background: #f3f5f9;
       color: #172033;
     }
+
     main {
       max-width: 560px;
       margin: 20px auto;
@@ -21,9 +23,20 @@
       border-radius: 18px;
       box-shadow: 0 8px 30px #18274612;
     }
+
     h1 { margin-top: 0; font-size: 27px; }
-    p { line-height: 1.5; color: #526078; }
-    label { display: block; font-weight: 650; margin: 18px 0 7px; }
+
+    p {
+      line-height: 1.5;
+      color: #526078;
+    }
+
+    label {
+      display: block;
+      font-weight: 650;
+      margin: 18px 0 7px;
+    }
+
     input {
       width: 100%;
       padding: 12px;
@@ -31,6 +44,7 @@
       border-radius: 9px;
       font: inherit;
     }
+
     button {
       width: 100%;
       margin-top: 24px;
@@ -43,7 +57,12 @@
       font-weight: 700;
       cursor: pointer;
     }
-    button:disabled { opacity: .55; cursor: wait; }
+
+    button:disabled {
+      opacity: .55;
+      cursor: wait;
+    }
+
     #status {
       margin-top: 20px;
       padding: 14px;
@@ -52,10 +71,17 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    #download { display: block; margin-top: 14px; font-weight: 700; }
+
+    #download {
+      display: block;
+      margin-top: 14px;
+      font-weight: 700;
+    }
+
     .hint { font-size: 13px; }
   </style>
 </head>
+
 <body>
 <main>
   <h1>Website APK Builder</h1>
@@ -63,23 +89,42 @@
 
   <form id="buildForm">
     <label for="website">Website URL</label>
-    <input id="website" type="url" placeholder="https://example.com"
-           required>
+    <input
+      id="website"
+      type="url"
+      placeholder="https://example.com"
+      required
+    >
 
     <label for="appName">App name</label>
-    <input id="appName" maxlength="40" placeholder="My Website"
-           required>
+    <input
+      id="appName"
+      maxlength="40"
+      placeholder="My Website"
+      required
+    >
 
     <label for="packageName">Package name</label>
-    <input id="packageName" placeholder="com.example.mywebsite"
-           pattern="[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+"
-           required>
-    <p class="hint">Use a unique package name, such as com.yourname.mywebsite.</p>
+    <input
+      id="packageName"
+      placeholder="com.example.mywebsite"
+      pattern="[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+"
+      required
+    >
+    <p class="hint">
+      Use a unique package name, such as com.yourname.mywebsite.
+    </p>
 
     <label for="icon">App icon</label>
-    <input id="icon" type="file" accept="image/png,image/jpeg,image/webp"
-           required>
-    <p class="hint">Choose a square image if possible. PNG is recommended.</p>
+    <input
+      id="icon"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      required
+    >
+    <p class="hint">
+      Choose a square image if possible. PNG is recommended.
+    </p>
 
     <button id="buildButton" type="submit">Build APK</button>
   </form>
@@ -90,8 +135,10 @@
 
 <script>
 (() => {
-  // WARNING: This token will be publicly visible in this website's source.
-  const GITHUB_TOKEN = "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";
+  // Do not put a live write-enabled token in a public website.
+  // This placeholder intentionally prevents unauthenticated requests.
+  const GITHUB_TOKEN = "PASTE_YOUR_GITHUB_TOKEN_HERE";
+
   const OWNER = "eliezer-devv";
   const REPO = "website-app-builder";
   const WORKFLOW = "build.yml";
@@ -116,8 +163,10 @@
 
     if (!response.ok) {
       const message = await response.text();
-      throw new Error("GitHub API error (" + response.status + "): " +
-                      message.slice(0, 500));
+      throw new Error(
+        "GitHub API error (" + response.status + "): " +
+        message.slice(0, 500)
+      );
     }
 
     if (response.status === 204) return null;
@@ -136,8 +185,15 @@
     event.preventDefault();
     download.hidden = true;
 
-    if (!GITHUB_TOKEN || GITHUB_TOKEN === "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") {
-      setStatus("Set the GitHub token in the page code first.");
+    // FIX: compare against the placeholder, not against the live token.
+    if (
+      !GITHUB_TOKEN ||
+      GITHUB_TOKEN === "PASTE_YOUR_GITHUB_TOKEN_HERE"
+    ) {
+      setStatus(
+        "GitHub authentication is not configured. " +
+        "A public website cannot read repository secrets directly."
+      );
       return;
     }
 
@@ -147,6 +203,7 @@
     const iconFile = document.getElementById("icon").files[0];
 
     let parsedUrl;
+
     try {
       parsedUrl = new URL(website);
     } catch {
@@ -160,7 +217,9 @@
     }
 
     if (!safePackageName(packageName)) {
-      setStatus("Enter a valid package name, such as com.example.mywebsite.");
+      setStatus(
+        "Enter a valid package name, such as com.example.mywebsite."
+      );
       return;
     }
 
@@ -176,82 +235,112 @@
 
       const runId = Date.now().toString();
       const branch = "web-build-" + runId;
-      const iconPath = "web-build-icons/icon-" + runId + "." +
-        ((iconFile.type === "image/jpeg") ? "jpg" :
-         (iconFile.type === "image/webp") ? "webp" : "png");
 
-      const repo = await api("/repos/" + OWNER + "/" + REPO);
-      const baseBranch = repo.default_branch;
-      const baseRef = await api(
-        "/repos/" + OWNER + "/" + REPO + "/git/ref/heads/" + baseBranch
+      const extension =
+        iconFile.type === "image/jpeg" ? "jpg" :
+        iconFile.type === "image/webp" ? "webp" : "png";
+
+      const iconPath = "web-build-icons/icon-" + runId + "." + extension;
+
+      const repo = await api(
+        "/repos/" + OWNER + "/" + REPO
       );
 
-      await api("/repos/" + OWNER + "/" + REPO + "/git/refs", {
-        method: "POST",
-        body: JSON.stringify({
-          ref: "refs/heads/" + branch,
-          sha: baseRef.object.sha
-        })
-      });
+      const baseBranch = repo.default_branch;
+
+      const baseRef = await api(
+        "/repos/" + OWNER + "/" + REPO +
+        "/git/ref/heads/" + baseBranch
+      );
+
+      await api(
+        "/repos/" + OWNER + "/" + REPO + "/git/refs",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ref: "refs/heads/" + branch,
+            sha: baseRef.object.sha
+          })
+        }
+      );
 
       setStatus("Uploading icon…");
 
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
+
         reader.onload = () => resolve(reader.result.split(",")[1]);
         reader.onerror = reject;
         reader.readAsDataURL(iconFile);
       });
 
-      await api("/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath, {
-        method: "PUT",
-        body: JSON.stringify({
-          message: "Upload icon for web build " + runId,
-          content: base64,
-          branch
-        })
-      });
+      await api(
+        "/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            message: "Upload icon for web build " + runId,
+            content: base64,
+            branch
+          })
+        }
+      );
 
       setStatus("Starting Android build…");
 
-      await api("/repos/" + OWNER + "/" + REPO +
-        "/actions/workflows/" + WORKFLOW + "/dispatches", {
-        method: "POST",
-        body: JSON.stringify({
-          ref: branch,
-          inputs: {
-            website_url: website,
-            app_name: appName,
-            package_name: packageName,
-            icon_path: iconPath,
-            request_id: runId
-          }
-        })
-      });
+      await api(
+        "/repos/" + OWNER + "/" + REPO +
+        "/actions/workflows/" + WORKFLOW + "/dispatches",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ref: branch,
+            inputs: {
+              website_url: website,
+              app_name: appName,
+              package_name: packageName,
+              icon_path: iconPath,
+              request_id: runId
+            }
+          })
+        }
+      );
 
       let run = null;
+
       for (let i = 0; i < 30; i++) {
         await sleep(2000);
-        const runs = await api("/repos/" + OWNER + "/" + REPO +
-          "/actions/workflows/" + WORKFLOW + "/runs?branch=" +
-          encodeURIComponent(branch) + "&per_page=10");
+
+        const runs = await api(
+          "/repos/" + OWNER + "/" + REPO +
+          "/actions/workflows/" + WORKFLOW +
+          "/runs?branch=" + encodeURIComponent(branch) +
+          "&per_page=10"
+        );
+
         run = runs.workflow_runs.find(item =>
           item.event === "workflow_dispatch" &&
           new Date(item.created_at).getTime() >= Date.now() - 180000
         );
+
         if (run) break;
       }
 
       if (!run) {
-        throw new Error("The build did not appear. Check the Actions tab in GitHub.");
+        throw new Error(
+          "The build did not appear. Check the Actions tab in GitHub."
+        );
       }
 
       setStatus("Build started. Waiting for Android to finish…");
 
       while (true) {
         await sleep(5000);
-        run = await api("/repos/" + OWNER + "/" + REPO +
-          "/actions/runs/" + run.id);
+
+        run = await api(
+          "/repos/" + OWNER + "/" + REPO +
+          "/actions/runs/" + run.id
+        );
 
         if (run.status === "completed") break;
 
@@ -259,33 +348,53 @@
       }
 
       if (run.conclusion !== "success") {
-        throw new Error("Build failed. Open the GitHub Actions run to see the logs:\n" +
-                        run.html_url);
+        throw new Error(
+          "Build failed. Open the GitHub Actions run to see the logs:\n" +
+          run.html_url
+        );
       }
 
       setStatus("Build complete! Finding your APK…");
 
       let release = null;
+
       for (let i = 0; i < 15; i++) {
         await sleep(2000);
-        const releases = await api("/repos/" + OWNER + "/" + REPO +
-          "/releases?per_page=20");
-        release = releases.find(item => item.tag_name === "build-" + runId);
-        if (release && release.assets.some(asset => asset.name.endsWith(".apk"))) {
+
+        const releases = await api(
+          "/repos/" + OWNER + "/" + REPO + "/releases?per_page=20"
+        );
+
+        release = releases.find(
+          item => item.tag_name === "build-" + runId
+        );
+
+        if (
+          release &&
+          release.assets.some(asset => asset.name.endsWith(".apk"))
+        ) {
           break;
         }
       }
 
       if (!release) {
-        throw new Error("Build succeeded, but its APK release was not found.");
+        throw new Error(
+          "Build succeeded, but its APK release was not found."
+        );
       }
 
-      const apk = release.assets.find(asset => asset.name.endsWith(".apk"));
-      if (!apk) throw new Error("No APK was attached to the release.");
+      const apk = release.assets.find(
+        asset => asset.name.endsWith(".apk")
+      );
+
+      if (!apk) {
+        throw new Error("No APK was attached to the release.");
+      }
 
       download.href = apk.browser_download_url;
       download.textContent = "Download " + appName + ".apk";
       download.hidden = false;
+
       setStatus("Your APK is ready.");
     } catch (error) {
       setStatus("Could not finish the build.\n" + error.message);
