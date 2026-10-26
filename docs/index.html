@@ -47,9 +47,7 @@
       padding: 0;
     }
 
-    input[type="file"] {
-      background: #fff;
-    }
+    input[type="file"] { background: #fff; }
 
     textarea {
       min-height: 150px;
@@ -112,10 +110,6 @@
     }
 
     .hint { font-size: 13px; }
-
-    .file-option {
-      margin-top: 8px;
-    }
   </style>
 </head>
 <body>
@@ -181,32 +175,13 @@
       Use a unique package name, such as com.yourname.mywebsite.
     </p>
 
-    <label>App icon</label>
-
-    <div class="file-option">
-      <label for="iconUpload">Choose an existing image</label>
-      <input
-        id="iconUpload"
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-      >
-    </div>
-
-    <div class="file-option">
-      <label for="iconCamera">Take a new picture</label>
-      <input
-        id="iconCamera"
-        type="file"
-        accept="image/*"
-        capture="environment"
-      >
-    </div>
-
-    <p class="hint">
-      Choose one of the two options above. Use a square image if possible.
-      PNG is recommended. On some phones, the browser may show a chooser
-      instead of opening the camera immediately.
-    </p>
+    <label for="icon">App icon</label>
+    <input
+      id="icon"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      required
+    >
 
     <label for="allowedHosts">Additional allowed hostnames (optional)</label>
     <textarea
@@ -245,9 +220,6 @@
   const rememberToken = document.getElementById("rememberToken");
   const forgetTokenButton = document.getElementById("forgetToken");
 
-  const uploadInput = document.getElementById("iconUpload");
-  const cameraInput = document.getElementById("iconCamera");
-
   let githubToken = "";
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -280,12 +252,7 @@
 
   function clearToken() {
     githubToken = "";
-
-    if (rememberToken.checked) {
-      tokenInput.value = getSavedToken();
-    } else {
-      tokenInput.value = "";
-    }
+    tokenInput.value = rememberToken.checked ? getSavedToken() : "";
   }
 
   function forgetSavedToken() {
@@ -305,9 +272,7 @@
   }
 
   tokenInput.addEventListener("input", () => {
-    if (rememberToken.checked) {
-      saveTokenIfRequested();
-    }
+    if (rememberToken.checked) saveTokenIfRequested();
     refreshTokenControls();
   });
 
@@ -324,53 +289,31 @@
 
   forgetTokenButton.addEventListener("click", forgetSavedToken);
 
-  try {
-    const savedToken = getSavedToken();
-
-    if (savedToken) {
-      tokenInput.value = savedToken;
-      rememberToken.checked = true;
-    }
-  } catch (_) {}
-
+  const savedToken = getSavedToken();
+  if (savedToken) {
+    tokenInput.value = savedToken;
+    rememberToken.checked = true;
+  }
   refreshTokenControls();
 
-  // Only one icon source should be selected at a time.
-  uploadInput.addEventListener("change", () => {
-    if (uploadInput.files.length) {
-      cameraInput.value = "";
-    }
-  });
-
-  cameraInput.addEventListener("change", () => {
-    if (cameraInput.files.length) {
-      uploadInput.value = "";
-    }
-  });
-
   async function api(path, options = {}) {
-    const response = await fetch(
-      "https://api.github.com" + path,
-      {
-        ...options,
-        headers: {
-          "Accept": "application/vnd.github+json",
-          "Authorization": "Bearer " + githubToken,
-          "X-GitHub-Api-Version": "2022-11-28",
-          ...(options.headers || {})
-        }
+    const response = await fetch("https://api.github.com" + path, {
+      ...options,
+      headers: {
+        "Accept": "application/vnd.github+json",
+        "Authorization": "Bearer " + githubToken,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(options.headers || {})
       }
-    );
+    });
 
     if (!response.ok) {
       const message = await response.text();
       let detail = message;
-
       try {
         const parsed = JSON.parse(message);
         detail = parsed.message || message;
       } catch (_) {}
-
       throw new Error(
         "GitHub API error (" + response.status + "): " + detail
       );
@@ -396,7 +339,6 @@
 
     for (const [index, rawLine] of text.split(/[\r\n,]+/).entries()) {
       const host = rawLine.trim().toLowerCase();
-
       if (!host || host.startsWith("#")) continue;
 
       if (!pattern.test(host)) {
@@ -405,7 +347,6 @@
           "\nUse a hostname only, without protocol, path, port, or wildcard."
         );
       }
-
       hosts.add(host);
     }
 
@@ -415,23 +356,16 @@
   function readFileAsBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-
       reader.onload = () => {
         const result = String(reader.result || "");
         const comma = result.indexOf(",");
-
         if (comma < 0) {
           reject(new Error("Could not read the selected icon."));
           return;
         }
-
         resolve(result.slice(comma + 1));
       };
-
-      reader.onerror = () => {
-        reject(new Error("Could not read the selected icon."));
-      };
-
+      reader.onerror = () => reject(new Error("Could not read the selected icon."));
       reader.readAsDataURL(file);
     });
   }
@@ -439,7 +373,6 @@
   form.addEventListener("submit", async event => {
     event.preventDefault();
     download.hidden = true;
-
     githubToken = tokenInput.value.trim();
 
     if (!githubToken) {
@@ -452,11 +385,10 @@
     const website = document.getElementById("website").value.trim();
     const appName = document.getElementById("appName").value.trim();
     const packageName = document.getElementById("packageName").value.trim();
-    const iconFile = uploadInput.files[0] || cameraInput.files[0];
+    const iconFile = document.getElementById("icon").files[0];
     const hostsText = document.getElementById("allowedHosts").value;
 
     let allowedHosts;
-
     try {
       allowedHosts = validateAndNormalizeHosts(hostsText);
     } catch (error) {
@@ -466,7 +398,6 @@
     }
 
     let parsedUrl;
-
     try {
       parsedUrl = new URL(website);
     } catch (_) {
@@ -475,25 +406,20 @@
       return;
     }
 
-    if (
-      !["http:", "https:"].includes(parsedUrl.protocol) ||
-      !parsedUrl.hostname
-    ) {
+    if (!["http:", "https:"].includes(parsedUrl.protocol) || !parsedUrl.hostname) {
       setStatus("Enter a valid HTTP or HTTPS website URL.");
       clearToken();
       return;
     }
 
     if (!safePackageName(packageName)) {
-      setStatus(
-        "Enter a valid package name, such as com.example.mywebsite."
-      );
+      setStatus("Enter a valid package name, such as com.example.mywebsite.");
       clearToken();
       return;
     }
 
     if (!iconFile) {
-      setStatus("Choose an existing icon image or take a new picture.");
+      setStatus("Please choose an app icon.");
       clearToken();
       return;
     }
@@ -524,8 +450,7 @@
         );
       }
 
-      const iconPath =
-        "web-build-icons/icon-" + runId + "." + extension;
+      const iconPath = "web-build-icons/icon-" + runId + "." + extension;
 
       const repo = await api("/repos/" + OWNER + "/" + REPO);
       const baseBranch = repo.default_branch;
@@ -544,20 +469,16 @@
       });
 
       setStatus("Uploading app icon…");
-
       const base64 = await readFileAsBase64(iconFile);
 
-      await api(
-        "/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath,
-        {
-          method: "PUT",
-          body: JSON.stringify({
-            message: "Upload icon for web build " + runId,
-            content: base64,
-            branch
-          })
-        }
-      );
+      await api("/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath, {
+        method: "PUT",
+        body: JSON.stringify({
+          message: "Upload icon for web build " + runId,
+          content: base64,
+          branch
+        })
+      });
 
       setStatus("Starting Android build…");
 
@@ -584,7 +505,6 @@
 
       for (let i = 0; i < 30; i++) {
         await sleep(2000);
-
         const runs = await api(
           "/repos/" + OWNER + "/" + REPO +
           "/actions/workflows/" + WORKFLOW + "/runs?branch=" +
@@ -595,27 +515,21 @@
           item.event === "workflow_dispatch" &&
           new Date(item.created_at).getTime() >= Date.now() - 180000
         );
-
         if (run) break;
       }
 
       if (!run) {
-        throw new Error(
-          "The build did not appear. Check the Actions tab in GitHub."
-        );
+        throw new Error("The build did not appear. Check the Actions tab in GitHub.");
       }
 
       setStatus("Build started. Waiting for Android to finish…");
 
       while (true) {
         await sleep(5000);
-
         run = await api(
           "/repos/" + OWNER + "/" + REPO + "/actions/runs/" + run.id
         );
-
         if (run.status === "completed") break;
-
         setStatus("Build in progress…\nStatus: " + run.status);
       }
 
@@ -627,47 +541,32 @@
       }
 
       setStatus("Build complete! Finding your APK…");
-
       let release = null;
 
       for (let i = 0; i < 15; i++) {
         await sleep(2000);
-
         const releases = await api(
           "/repos/" + OWNER + "/" + REPO + "/releases?per_page=20"
         );
 
-        release = releases.find(
-          item => item.tag_name === "build-" + runId
-        );
-
-        if (
-          release &&
-          release.assets.some(asset => asset.name.endsWith(".apk"))
-        ) {
+        release = releases.find(item => item.tag_name === "build-" + runId);
+        if (release && release.assets.some(asset => asset.name.endsWith(".apk"))) {
           break;
         }
       }
 
       if (!release) {
-        throw new Error(
-          "Build succeeded, but its APK release was not found."
-        );
+        throw new Error("Build succeeded, but its APK release was not found.");
       }
 
-      const apk = release.assets.find(
-        asset => asset.name.endsWith(".apk")
-      );
-
-      if (!apk) {
-        throw new Error("No APK was attached to the release.");
-      }
+      const apk = release.assets.find(asset => asset.name.endsWith(".apk"));
+      if (!apk) throw new Error("No APK was attached to the release.");
 
       download.href = apk.browser_download_url;
       download.textContent = "Download " + appName + ".apk";
       download.hidden = false;
-
       setStatus("Your APK is ready.");
+
     } catch (error) {
       setStatus("Could not finish the build.\n" + error.message);
     } finally {
