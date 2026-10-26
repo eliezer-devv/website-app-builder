@@ -40,9 +40,7 @@ import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URLConnection;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -123,16 +121,21 @@ public class MainActivity extends Activity {
     }
 
     private void loadAllowedHosts() {
-        if (ALLOWED_HOSTS == null || ALLOWED_HOSTS.trim().isEmpty()) return;
+        if (ALLOWED_HOSTS == null || ALLOWED_HOSTS.trim().isEmpty()) {
+            return;
+        }
 
         for (String item : ALLOWED_HOSTS.split(",")) {
             String host = normalizeHost(item.trim());
-            if (isValidHostname(host)) extraAllowedHosts.add(host);
+            if (isValidHostname(host)) {
+                extraAllowedHosts.add(host);
+            }
         }
     }
 
     private void recordNavigation(String url, String event) {
         if (url == null) return;
+
         navigationHistory.add(event + " | " + url);
         while (navigationHistory.size() > 60) {
             navigationHistory.remove(navigationHistory.iterator().next());
@@ -151,14 +154,18 @@ public class MainActivity extends Activity {
 
     private boolean isExplicitlyAllowed(String host) {
         for (String allowed : extraAllowedHosts) {
-            if (host.equals(allowed) || host.endsWith("." + allowed)) return true;
+            if (host.equals(allowed) || host.endsWith("." + allowed)) {
+                return true;
+            }
         }
         return false;
     }
 
     private boolean isOriginalSite(Uri uri) {
         if (uri == null || uri.getHost() == null
-                || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+                || !"https".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
 
         String host = normalizeHost(uri.getHost());
         return host.equals(allowedHost) || host.endsWith("." + allowedHost);
@@ -169,7 +176,9 @@ public class MainActivity extends Activity {
         result.append("Configured website:\n").append(HOME_URL);
         result.append("\n\nObserved navigation history:");
 
-        if (navigationHistory.isEmpty()) result.append("\nNo navigation recorded.");
+        if (navigationHistory.isEmpty()) {
+            result.append("\nNo navigation recorded.");
+        }
 
         for (String entry : navigationHistory) {
             result.append("\n").append(entry);
@@ -190,6 +199,7 @@ public class MainActivity extends Activity {
                 + "or background-resource failure. This report contains "
                 + "observable navigation and page-load errors."
         );
+
         return result.toString();
     }
 
@@ -263,7 +273,9 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPermissionRequestCanceled(PermissionRequest request) {
-                if (pendingWebPermission == request) pendingWebPermission = null;
+                if (pendingWebPermission == request) {
+                    pendingWebPermission = null;
+                }
             }
 
             @Override
@@ -281,17 +293,18 @@ public class MainActivity extends Activity {
                 if (filePathCallback != null) {
                     filePathCallback.onReceiveValue(null);
                 }
+
                 filePathCallback = callback;
                 openFileChooser(params);
                 return true;
             }
         });
 
-        webView.setDownloadListener((url, userAgent, contentDisposition,
-                                     mimeType, contentLength) ->
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) ->
                 downloadFile(url, userAgent, contentDisposition, mimeType));
 
         webView.setWebViewClient(new WebViewClient() {
+
             @Override
             public boolean shouldOverrideUrlLoading(
                     WebView view, WebResourceRequest request) {
@@ -366,6 +379,7 @@ public class MainActivity extends Activity {
                 rootLayout.removeView(view);
                 view.destroy();
                 webView = null;
+
                 showError("The website renderer stopped unexpectedly."
                         + "\n\nDid crash: " + detail.didCrash()
                         + "\n\n" + diagnosticHistory()
@@ -376,15 +390,15 @@ public class MainActivity extends Activity {
     }
 
     private void handleWebPermissionRequest(PermissionRequest request) {
-        Uri origin = request.getOrigin();
-
-        if (!isAllowedOrigin(origin)) {
+        if (!isAllowedOrigin(request.getOrigin())) {
             request.deny();
-            recordNavigation(String.valueOf(origin), "DENIED: website permission origin");
+            recordNavigation(String.valueOf(request.getOrigin()),
+                    "DENIED: website permission origin");
             return;
         }
 
         List<String> requested = new ArrayList<>();
+
         for (String resource : request.getResources()) {
             if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
                 requested.add(Manifest.permission.CAMERA);
@@ -411,27 +425,36 @@ public class MainActivity extends Activity {
             return;
         }
 
-        if (pendingWebPermission != null) pendingWebPermission.deny();
+        if (pendingWebPermission != null) {
+            pendingWebPermission.deny();
+        }
+
         pendingWebPermission = request;
         requestPermissions(missing.toArray(new String[0]), REQUEST_WEB_PERMISSIONS);
     }
 
     private void grantAllowedWebResources(PermissionRequest request) {
         List<String> granted = new ArrayList<>();
+
         for (String resource : request.getResources()) {
             if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
-                    && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    && ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.CAMERA)
                     == PackageManager.PERMISSION_GRANTED) {
                 granted.add(resource);
             } else if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
-                    && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    && ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {
                 granted.add(resource);
             }
         }
 
-        if (granted.isEmpty()) request.deny();
-        else request.grant(granted.toArray(new String[0]));
+        if (granted.isEmpty()) {
+            request.deny();
+        } else {
+            request.grant(granted.toArray(new String[0]));
+        }
     }
 
     private void handleGeolocationRequest(
@@ -456,8 +479,10 @@ public class MainActivity extends Activity {
             if (pendingGeoCallback != null) {
                 pendingGeoCallback.invoke(pendingGeoOrigin, false, false);
             }
+
             pendingGeoOrigin = origin;
             pendingGeoCallback = callback;
+
             requestPermissions(new String[]{
                     Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.ACCESS_FINE_LOCATION
@@ -475,18 +500,21 @@ public class MainActivity extends Activity {
             pendingWebPermission = null;
 
             if (request != null) {
-                boolean allowedOrigin = isAllowedOrigin(request.getOrigin());
-                if (allowedOrigin) grantAllowedWebResources(request);
-                else request.deny();
+                if (isAllowedOrigin(request.getOrigin())) {
+                    grantAllowedWebResources(request);
+                } else {
+                    request.deny();
+                }
             }
         } else if (requestCode == REQUEST_GEOLOCATION) {
             if (pendingGeoCallback != null) {
-                boolean granted = ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.ACCESS_FINE_LOCATION)
-                        == PackageManager.PERMISSION_GRANTED
+                boolean granted =
+                        ContextCompat.checkSelfPermission(
+                                this, Manifest.permission.ACCESS_FINE_LOCATION)
+                                == PackageManager.PERMISSION_GRANTED
                         || ContextCompat.checkSelfPermission(
-                        this, Manifest.permission.ACCESS_COARSE_LOCATION)
-                        == PackageManager.PERMISSION_GRANTED;
+                                this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                                == PackageManager.PERMISSION_GRANTED;
 
                 pendingGeoCallback.invoke(pendingGeoOrigin, granted, false);
                 pendingGeoCallback = null;
@@ -497,6 +525,7 @@ public class MainActivity extends Activity {
 
     private void openFileChooser(WebChromeClient.FileChooserParams params) {
         Intent contentIntent;
+
         try {
             contentIntent = params.createIntent();
             contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -513,8 +542,10 @@ public class MainActivity extends Activity {
             if (cameraIntent != null) {
                 Intent chooser = new Intent(Intent.ACTION_CHOOSER);
                 chooser.putExtra(Intent.EXTRA_INTENT, contentIntent);
-                chooser.putExtra(Intent.EXTRA_TITLE, "Choose a file or take a picture");
-                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
+                chooser.putExtra(Intent.EXTRA_TITLE,
+                        "Choose a file or take a picture");
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS,
+                        new Intent[]{cameraIntent});
                 startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
             } else {
                 startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
@@ -527,7 +558,8 @@ public class MainActivity extends Activity {
                 startActivityForResult(fallback, REQUEST_FILE_CHOOSER);
             } catch (ActivityNotFoundException ignored) {
                 finishFileChooser(null);
-                Toast.makeText(this, "No file picker is available.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "No file picker is available.",
+                        Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -550,6 +582,7 @@ public class MainActivity extends Activity {
             intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
             return intent;
         } catch (IOException | IllegalArgumentException e) {
             cameraPhotoUri = null;
@@ -588,6 +621,7 @@ public class MainActivity extends Activity {
             String url, String userAgent, String contentDisposition, String mimeType) {
         try {
             Uri uri = Uri.parse(url);
+
             if (!"https".equalsIgnoreCase(uri.getScheme())
                     || !isAllowedOrigin(uri)) {
                 Toast.makeText(this,
@@ -597,8 +631,7 @@ public class MainActivity extends Activity {
             }
 
             DownloadManager.Request request = new DownloadManager.Request(uri);
-            request.setTitle(DownloadManager
-                    .Request.getDefaultMimeType(mimeType));
+            request.setTitle("Website download");
             request.setDescription("Downloading file");
             request.setNotificationVisibility(
                     DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
@@ -607,17 +640,25 @@ public class MainActivity extends Activity {
                     "website-download-" + System.currentTimeMillis()
                             + extensionForMimeType(mimeType));
 
-            if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
+            if (userAgent != null) {
+                request.addRequestHeader("User-Agent", userAgent);
+            }
 
             String cookies = CookieManager.getInstance().getCookie(url);
-            if (cookies != null) request.addRequestHeader("Cookie", cookies);
+            if (cookies != null) {
+                request.addRequestHeader("Cookie", cookies);
+            }
 
             DownloadManager manager =
                     (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-            if (manager == null) throw new IllegalStateException("Download service unavailable");
+
+            if (manager == null) {
+                throw new IllegalStateException("Download service unavailable");
+            }
 
             manager.enqueue(request);
             Toast.makeText(this, "Download started.", Toast.LENGTH_SHORT).show();
+
         } catch (Exception e) {
             Toast.makeText(this,
                     "Couldn't start download: " + e.getMessage(),
@@ -627,8 +668,10 @@ public class MainActivity extends Activity {
 
     private String extensionForMimeType(String mimeType) {
         if (mimeType == null) return "";
+
         String extension = android.webkit.MimeTypeMap.getSingleton()
                 .getExtensionFromMimeType(mimeType);
+
         return extension == null ? "" : "." + extension;
     }
 
@@ -657,6 +700,7 @@ public class MainActivity extends Activity {
     private void showBlockedNavigation(Uri target, String reason) {
         mainFrameLoadFailed = true;
         lastBlockedUrl = target == null ? "unknown" : target.toString();
+
         showError("NAVIGATION BLOCKED"
                 + "\n\nReason: " + reason
                 + "\n\nAddress:\n" + target
@@ -669,6 +713,7 @@ public class MainActivity extends Activity {
         navigationHistory.clear();
         lastBlockedUrl = "";
         recordNavigation(HOME_URL, "RETRY / START");
+
         mainFrameLoadFailed = false;
         hideError();
         webView.loadUrl(HOME_URL);
@@ -684,6 +729,7 @@ public class MainActivity extends Activity {
 
         errorText.setText(message);
         copyButton.setText("Copy diagnostic details");
+
         if (webView != null) webView.setVisibility(View.GONE);
         errorLayout.setVisibility(View.VISIBLE);
     }
@@ -693,14 +739,17 @@ public class MainActivity extends Activity {
                 (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
 
         if (clipboard == null) {
-            Toast.makeText(this, "Clipboard unavailable.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Clipboard unavailable.",
+                    Toast.LENGTH_LONG).show();
             return;
         }
 
         clipboard.setPrimaryClip(ClipData.newPlainText(
                 "Website app diagnostics", errorText.getText().toString()));
+
         copyButton.setText("Copied!");
-        Toast.makeText(this, "Diagnostic details copied. Paste them into ChatGPT.",
+        Toast.makeText(this,
+                "Diagnostic details copied. Paste them into ChatGPT.",
                 Toast.LENGTH_LONG).show();
     }
 
@@ -717,7 +766,8 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (errorLayout != null && errorLayout.getVisibility() == View.VISIBLE) {
+        if (errorLayout != null
+                && errorLayout.getVisibility() == View.VISIBLE) {
             if (webView != null && webView.canGoBack()) {
                 hideError();
                 webView.goBack();
@@ -734,6 +784,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
+
         if (webView != null) {
             Bundle webState = new Bundle();
             webView.saveState(webState);
@@ -747,16 +798,19 @@ public class MainActivity extends Activity {
             pendingWebPermission.deny();
             pendingWebPermission = null;
         }
+
         if (pendingGeoCallback != null) {
             pendingGeoCallback.invoke(pendingGeoOrigin, false, false);
             pendingGeoCallback = null;
         }
+
         finishFileChooser(null);
 
         if (webView != null) {
             webView.destroy();
             webView = null;
         }
+
         super.onDestroy();
     }
 }
