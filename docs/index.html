@@ -137,7 +137,7 @@
 (() => {
   // Do not put a live write-enabled token in a public website.
   // This placeholder intentionally prevents unauthenticated requests.
-  const GITHUB_TOKEN = "PASTE_YOUR_GITHUB_TOKEN_HERE";
+  const GITHUB_TOKEN = "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";
 
   const OWNER = "eliezer-devv";
   const REPO = "website-app-builder";
@@ -188,7 +188,7 @@
     // FIX: compare against the placeholder, not against the live token.
     if (
       !GITHUB_TOKEN ||
-      GITHUB_TOKEN === "PASTE_YOUR_GITHUB_TOKEN_HERE"
+      GITHUB_TOKEN === "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"
     ) {
       setStatus(
         "GitHub authentication is not configured. " +
