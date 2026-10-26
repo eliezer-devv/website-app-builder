@@ -1,16 +1,27 @@
 package com.websitewrapper.app;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.GeolocationPermissions;
+import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -24,8 +35,17 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
+
+import java.io.File;
+import java.io.IOException;
+import java.net.URLConnection;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -33,6 +53,10 @@ public class MainActivity extends Activity {
 
     private static final String HOME_URL = BuildConfig.HOME_URL;
     private static final String ALLOWED_HOSTS = BuildConfig.ALLOWED_HOSTS;
+
+    private static final int REQUEST_WEB_PERMISSIONS = 2101;
+    private static final int REQUEST_GEOLOCATION = 2102;
+    private static final int REQUEST_FILE_CHOOSER = 2103;
 
     private WebView webView;
     private LinearLayout rootLayout;
@@ -46,6 +70,12 @@ public class MainActivity extends Activity {
 
     private final Set<String> extraAllowedHosts = new HashSet<>();
     private final Set<String> navigationHistory = new LinkedHashSet<>();
+
+    private PermissionRequest pendingWebPermission;
+    private GeolocationPermissions.Callback pendingGeoCallback;
+    private String pendingGeoOrigin;
+    private ValueCallback<Uri[]> filePathCallback;
+    private Uri cameraPhotoUri;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,7 +99,6 @@ public class MainActivity extends Activity {
 
         if (savedInstanceState != null) {
             Bundle webState = savedInstanceState.getBundle("webview_state");
-
             if (webState == null || webView.restoreState(webState) == null) {
                 loadHome();
             }
@@ -80,11 +109,9 @@ public class MainActivity extends Activity {
 
     private String normalizeHost(String host) {
         String normalized = host.toLowerCase(Locale.ROOT);
-
         if (normalized.startsWith("www.")) {
             normalized = normalized.substring(4);
         }
-
         return normalized;
     }
 
@@ -96,40 +123,53 @@ public class MainActivity extends Activity {
     }
 
     private void loadAllowedHosts() {
-        if (ALLOWED_HOSTS == null || ALLOWED_HOSTS.trim().isEmpty()) {
-            return;
-        }
+        if (ALLOWED_HOSTS == null || ALLOWED_HOSTS.trim().isEmpty()) return;
 
         for (String item : ALLOWED_HOSTS.split(",")) {
             String host = normalizeHost(item.trim());
-
-            if (isValidHostname(host)) {
-                extraAllowedHosts.add(host);
-            }
+            if (isValidHostname(host)) extraAllowedHosts.add(host);
         }
     }
 
     private void recordNavigation(String url, String event) {
         if (url == null) return;
-
         navigationHistory.add(event + " | " + url);
-
         while (navigationHistory.size() > 60) {
             navigationHistory.remove(navigationHistory.iterator().next());
         }
     }
 
+    private boolean isAllowedOrigin(Uri uri) {
+        if (uri == null || uri.getHost() == null
+                || !"https".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
+
+        String host = normalizeHost(uri.getHost());
+        return isOriginalSite(uri) || isExplicitlyAllowed(host);
+    }
+
+    private boolean isExplicitlyAllowed(String host) {
+        for (String allowed : extraAllowedHosts) {
+            if (host.equals(allowed) || host.endsWith("." + allowed)) return true;
+        }
+        return false;
+    }
+
+    private boolean isOriginalSite(Uri uri) {
+        if (uri == null || uri.getHost() == null
+                || !"https".equalsIgnoreCase(uri.getScheme())) return false;
+
+        String host = normalizeHost(uri.getHost());
+        return host.equals(allowedHost) || host.endsWith("." + allowedHost);
+    }
+
     private String diagnosticHistory() {
         StringBuilder result = new StringBuilder();
-
-        result.append("Configured website:\n")
-                .append(HOME_URL);
-
+        result.append("Configured website:\n").append(HOME_URL);
         result.append("\n\nObserved navigation history:");
 
-        if (navigationHistory.isEmpty()) {
-            result.append("\nNo navigation recorded.");
-        }
+        if (navigationHistory.isEmpty()) result.append("\nNo navigation recorded.");
 
         for (String entry : navigationHistory) {
             result.append("\n").append(entry);
@@ -137,9 +177,7 @@ public class MainActivity extends Activity {
 
         if (!lastBlockedUrl.isEmpty()) {
             Uri blocked = Uri.parse(lastBlockedUrl);
-
-            result.append("\n\nBlocked destination:\n")
-                    .append(lastBlockedUrl);
+            result.append("\n\nBlocked destination:\n").append(lastBlockedUrl);
 
             if (blocked.getHost() != null) {
                 result.append("\n\nSuggested custom-rules entry:\n")
@@ -148,13 +186,10 @@ public class MainActivity extends Activity {
         }
 
         result.append(
-                "\n\nLimitations: Android WebView does not expose every "
-                + "internal redirect or failed background resource. "
-                + "This report includes observable main-frame navigation "
-                + "and load errors; it cannot guarantee the complete "
-                + "redirect chain."
+                "\n\nNote: WebView does not expose every internal redirect "
+                + "or background-resource failure. This report contains "
+                + "observable navigation and page-load errors."
         );
-
         return result.toString();
     }
 
@@ -171,21 +206,16 @@ public class MainActivity extends Activity {
         errorLayout.setVisibility(View.GONE);
 
         ScrollView scrollView = new ScrollView(this);
-
         errorText = new TextView(this);
         errorText.setTextColor(Color.DKGRAY);
         errorText.setTextSize(16);
         errorText.setGravity(Gravity.CENTER);
         errorText.setTextIsSelectable(true);
         errorText.setText("Website diagnostic information will appear here.");
-
         scrollView.addView(errorText);
 
         errorLayout.addView(scrollView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
-        ));
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
         copyButton = new Button(this);
         copyButton.setText("Copy diagnostic details");
@@ -205,16 +235,9 @@ public class MainActivity extends Activity {
         rootLayout.removeAllViews();
 
         rootLayout.addView(webView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
-        ));
-
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
         rootLayout.addView(errorLayout, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
-        ));
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -223,42 +246,68 @@ public class MainActivity extends Activity {
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
         settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
+        settings.setAllowContentAccess(true);
+        settings.setGeolocationEnabled(true);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(
-                    WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            );
-            CookieManager.getInstance()
-                    .setAcceptThirdPartyCookies(webView, true);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
         }
 
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                runOnUiThread(() -> handleWebPermissionRequest(request));
+            }
+
+            @Override
+            public void onPermissionRequestCanceled(PermissionRequest request) {
+                if (pendingWebPermission == request) pendingWebPermission = null;
+            }
+
+            @Override
+            public void onGeolocationPermissionsShowPrompt(
+                    String origin, GeolocationPermissions.Callback callback) {
+                handleGeolocationRequest(origin, callback);
+            }
+
+            @Override
+            public boolean onShowFileChooser(
+                    WebView view,
+                    ValueCallback<Uri[]> callback,
+                    FileChooserParams params) {
+
+                if (filePathCallback != null) {
+                    filePathCallback.onReceiveValue(null);
+                }
+                filePathCallback = callback;
+                openFileChooser(params);
+                return true;
+            }
+        });
+
+        webView.setDownloadListener((url, userAgent, contentDisposition,
+                                     mimeType, contentLength) ->
+                downloadFile(url, userAgent, contentDisposition, mimeType));
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(
                     WebView view, WebResourceRequest request) {
-
-                if (!request.isForMainFrame()) {
-                    return false;
-                }
-
+                if (!request.isForMainFrame()) return false;
                 return handleMainFrameNavigation(request.getUrl());
             }
 
             @SuppressWarnings("deprecation")
             @Override
-            public boolean shouldOverrideUrlLoading(
-                    WebView view, String url) {
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
                 return handleMainFrameNavigation(Uri.parse(url));
             }
 
             @Override
             public void onPageStarted(
-                    WebView view,
-                    String url,
-                    android.graphics.Bitmap favicon) {
+                    WebView view, String url, android.graphics.Bitmap favicon) {
                 recordNavigation(url, "PAGE STARTED");
                 mainFrameLoadFailed = false;
                 hideError();
@@ -267,117 +316,327 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 recordNavigation(url, "PAGE FINISHED");
-
-                if (!mainFrameLoadFailed) {
-                    hideError();
-                }
+                if (!mainFrameLoadFailed) hideError();
             }
 
             @Override
             public void onReceivedError(
-                    WebView view,
-                    WebResourceRequest request,
-                    WebResourceError error) {
-
+                    WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     mainFrameLoadFailed = true;
-
-                    showError(
-                            "The website could not be loaded."
-                                    + "\n\nError code: "
-                                    + error.getErrorCode()
-                                    + "\nDescription: "
-                                    + error.getDescription()
-                                    + "\n\nFailing address:\n"
-                                    + request.getUrl()
-                                    + "\n\n"
-                                    + diagnosticHistory()
-                    );
+                    showError("The website could not be loaded."
+                            + "\n\nError code: " + error.getErrorCode()
+                            + "\nDescription: " + error.getDescription()
+                            + "\n\nFailing address:\n" + request.getUrl()
+                            + "\n\n" + diagnosticHistory());
                 }
             }
 
             @SuppressWarnings("deprecation")
             @Override
             public void onReceivedError(
-                    WebView view,
-                    int errorCode,
-                    String description,
-                    String failingUrl) {
-
+                    WebView view, int errorCode, String description, String failingUrl) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                     mainFrameLoadFailed = true;
-
-                    showError(
-                            "The website could not be loaded."
-                                    + "\n\nError code: " + errorCode
-                                    + "\nDescription: " + description
-                                    + "\n\nFailing address:\n" + failingUrl
-                                    + "\n\n" + diagnosticHistory()
-                    );
+                    showError("The website could not be loaded."
+                            + "\n\nError code: " + errorCode
+                            + "\nDescription: " + description
+                            + "\n\nFailing address:\n" + failingUrl
+                            + "\n\n" + diagnosticHistory());
                 }
             }
 
             @Override
             public void onReceivedHttpError(
-                    WebView view,
-                    WebResourceRequest request,
+                    WebView view, WebResourceRequest request,
                     WebResourceResponse response) {
-
-                if (request.isForMainFrame()
-                        && response.getStatusCode() >= 400) {
+                if (request.isForMainFrame() && response.getStatusCode() >= 400) {
                     mainFrameLoadFailed = true;
-
-                    showError(
-                            "The website returned an HTTP error."
-                                    + "\n\nHTTP status: "
-                                    + response.getStatusCode()
-                                    + "\nReason: "
-                                    + response.getReasonPhrase()
-                                    + "\n\nFailing address:\n"
-                                    + request.getUrl()
-                                    + "\n\n" + diagnosticHistory()
-                    );
+                    showError("The website returned an HTTP error."
+                            + "\n\nHTTP status: " + response.getStatusCode()
+                            + "\nReason: " + response.getReasonPhrase()
+                            + "\n\nFailing address:\n" + request.getUrl()
+                            + "\n\n" + diagnosticHistory());
                 }
             }
 
             @Override
             public boolean onRenderProcessGone(
-                    WebView view,
-                    RenderProcessGoneDetail detail) {
-
+                    WebView view, RenderProcessGoneDetail detail) {
                 rootLayout.removeView(view);
                 view.destroy();
                 webView = null;
-
-                showError(
-                        "The website renderer stopped unexpectedly."
-                                + "\n\nDid crash: " + detail.didCrash()
-                                + "\nRenderer priority at exit: "
-                                + detail.rendererPriorityAtExit()
-                                + "\n\n" + diagnosticHistory()
-                                + "\n\nTap Try again to reload."
-                );
-
+                showError("The website renderer stopped unexpectedly."
+                        + "\n\nDid crash: " + detail.didCrash()
+                        + "\n\n" + diagnosticHistory()
+                        + "\n\nTap Try again to reload.");
                 return true;
             }
         });
     }
 
+    private void handleWebPermissionRequest(PermissionRequest request) {
+        Uri origin = request.getOrigin();
+
+        if (!isAllowedOrigin(origin)) {
+            request.deny();
+            recordNavigation(String.valueOf(origin), "DENIED: website permission origin");
+            return;
+        }
+
+        List<String> requested = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) {
+                requested.add(Manifest.permission.CAMERA);
+            } else if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
+                requested.add(Manifest.permission.RECORD_AUDIO);
+            }
+        }
+
+        if (requested.isEmpty()) {
+            request.deny();
+            return;
+        }
+
+        List<String> missing = new ArrayList<>();
+        for (String permission : requested) {
+            if (ContextCompat.checkSelfPermission(this, permission)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(permission);
+            }
+        }
+
+        if (missing.isEmpty()) {
+            grantAllowedWebResources(request);
+            return;
+        }
+
+        if (pendingWebPermission != null) pendingWebPermission.deny();
+        pendingWebPermission = request;
+        requestPermissions(missing.toArray(new String[0]), REQUEST_WEB_PERMISSIONS);
+    }
+
+    private void grantAllowedWebResources(PermissionRequest request) {
+        List<String> granted = new ArrayList<>();
+        for (String resource : request.getResources()) {
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED) {
+                granted.add(resource);
+            } else if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)
+                    && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED) {
+                granted.add(resource);
+            }
+        }
+
+        if (granted.isEmpty()) request.deny();
+        else request.grant(granted.toArray(new String[0]));
+    }
+
+    private void handleGeolocationRequest(
+            String origin, GeolocationPermissions.Callback callback) {
+        Uri uri = Uri.parse(origin);
+
+        if (!isAllowedOrigin(uri)) {
+            callback.invoke(origin, false, false);
+            return;
+        }
+
+        boolean fine = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean coarse = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+
+        if (fine || coarse) {
+            callback.invoke(origin, true, false);
+        } else {
+            if (pendingGeoCallback != null) {
+                pendingGeoCallback.invoke(pendingGeoOrigin, false, false);
+            }
+            pendingGeoOrigin = origin;
+            pendingGeoCallback = callback;
+            requestPermissions(new String[]{
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+            }, REQUEST_GEOLOCATION);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_WEB_PERMISSIONS) {
+            PermissionRequest request = pendingWebPermission;
+            pendingWebPermission = null;
+
+            if (request != null) {
+                boolean allowedOrigin = isAllowedOrigin(request.getOrigin());
+                if (allowedOrigin) grantAllowedWebResources(request);
+                else request.deny();
+            }
+        } else if (requestCode == REQUEST_GEOLOCATION) {
+            if (pendingGeoCallback != null) {
+                boolean granted = ContextCompat.checkSelfPermission(
+                        this, Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED
+                        || ContextCompat.checkSelfPermission(
+                        this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED;
+
+                pendingGeoCallback.invoke(pendingGeoOrigin, granted, false);
+                pendingGeoCallback = null;
+                pendingGeoOrigin = null;
+            }
+        }
+    }
+
+    private void openFileChooser(WebChromeClient.FileChooserParams params) {
+        Intent contentIntent;
+        try {
+            contentIntent = params.createIntent();
+            contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            contentIntent.setType("*/*");
+        } catch (Exception e) {
+            contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
+            contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+            contentIntent.setType("*/*");
+        }
+
+        Intent cameraIntent = createCameraIntent();
+
+        try {
+            if (cameraIntent != null) {
+                Intent chooser = new Intent(Intent.ACTION_CHOOSER);
+                chooser.putExtra(Intent.EXTRA_INTENT, contentIntent);
+                chooser.putExtra(Intent.EXTRA_TITLE, "Choose a file or take a picture");
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{cameraIntent});
+                startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
+            } else {
+                startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
+            }
+        } catch (ActivityNotFoundException e) {
+            try {
+                Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                fallback.setType("*/*");
+                startActivityForResult(fallback, REQUEST_FILE_CHOOSER);
+            } catch (ActivityNotFoundException ignored) {
+                finishFileChooser(null);
+                Toast.makeText(this, "No file picker is available.", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    private Intent createCameraIntent() {
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+
+        if (intent.resolveActivity(getPackageManager()) == null) return null;
+
+        try {
+            File directory = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if (directory == null) return intent;
+
+            if (!directory.exists() && !directory.mkdirs()) return intent;
+
+            File photo = File.createTempFile("website_photo_", ".jpg", directory);
+            cameraPhotoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", photo);
+
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            return intent;
+        } catch (IOException | IllegalArgumentException e) {
+            cameraPhotoUri = null;
+            return intent;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_FILE_CHOOSER) {
+            Uri[] results = null;
+
+            if (resultCode == RESULT_OK) {
+                if (data != null && data.getData() != null) {
+                    results = new Uri[]{data.getData()};
+                } else if (cameraPhotoUri != null) {
+                    results = new Uri[]{cameraPhotoUri};
+                }
+            }
+
+            finishFileChooser(results);
+            cameraPhotoUri = null;
+        }
+    }
+
+    private void finishFileChooser(Uri[] results) {
+        if (filePathCallback != null) {
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+        }
+    }
+
+    private void downloadFile(
+            String url, String userAgent, String contentDisposition, String mimeType) {
+        try {
+            Uri uri = Uri.parse(url);
+            if (!"https".equalsIgnoreCase(uri.getScheme())
+                    || !isAllowedOrigin(uri)) {
+                Toast.makeText(this,
+                        "Download blocked: hostname is not allowed.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            DownloadManager.Request request = new DownloadManager.Request(uri);
+            request.setTitle(DownloadManager
+                    .Request.getDefaultMimeType(mimeType));
+            request.setDescription("Downloading file");
+            request.setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setDestinationInExternalPublicDir(
+                    Environment.DIRECTORY_DOWNLOADS,
+                    "website-download-" + System.currentTimeMillis()
+                            + extensionForMimeType(mimeType));
+
+            if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
+
+            String cookies = CookieManager.getInstance().getCookie(url);
+            if (cookies != null) request.addRequestHeader("Cookie", cookies);
+
+            DownloadManager manager =
+                    (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (manager == null) throw new IllegalStateException("Download service unavailable");
+
+            manager.enqueue(request);
+            Toast.makeText(this, "Download started.", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Couldn't start download: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private String extensionForMimeType(String mimeType) {
+        if (mimeType == null) return "";
+        String extension = android.webkit.MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(mimeType);
+        return extension == null ? "" : "." + extension;
+    }
+
     private boolean handleMainFrameNavigation(Uri target) {
-        if (target == null
-                || target.getHost() == null
+        if (target == null || target.getHost() == null
                 || !"https".equalsIgnoreCase(target.getScheme())) {
-
-            recordNavigation(
-                    String.valueOf(target),
-                    "BLOCKED: HTTPS required"
-            );
-
-            showBlockedNavigation(
-                    target,
-                    "Only HTTPS navigation is allowed."
-            );
-
+            recordNavigation(String.valueOf(target), "BLOCKED: HTTPS required");
+            showBlockedNavigation(target, "Only HTTPS navigation is allowed.");
             return true;
         }
 
@@ -390,88 +649,42 @@ public class MainActivity extends Activity {
         }
 
         recordNavigation(target.toString(), "BLOCKED: hostname not allowed");
-
-        showBlockedNavigation(
-                target,
-                "This hostname is not in the original website "
-                        + "or the custom allowlist."
-        );
-
+        showBlockedNavigation(target,
+                "This hostname is not in the original website or custom allowlist.");
         return true;
-    }
-
-    private boolean isExplicitlyAllowed(String host) {
-        for (String allowed : extraAllowedHosts) {
-            if (host.equals(allowed)
-                    || host.endsWith("." + allowed)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private boolean isOriginalSite(Uri uri) {
-        if (uri == null
-                || uri.getHost() == null
-                || !"https".equalsIgnoreCase(uri.getScheme())) {
-            return false;
-        }
-
-        String host = normalizeHost(uri.getHost());
-
-        return host.equals(allowedHost)
-                || host.endsWith("." + allowedHost);
     }
 
     private void showBlockedNavigation(Uri target, String reason) {
         mainFrameLoadFailed = true;
         lastBlockedUrl = target == null ? "unknown" : target.toString();
-
-        showError(
-                "NAVIGATION BLOCKED"
-                        + "\n\nReason: " + reason
-                        + "\n\nAddress:\n" + target
-                        + "\n\n" + diagnosticHistory()
-        );
+        showError("NAVIGATION BLOCKED"
+                + "\n\nReason: " + reason
+                + "\n\nAddress:\n" + target
+                + "\n\n" + diagnosticHistory());
     }
 
     private void loadHome() {
-        if (webView == null) {
-            createWebView();
-        }
+        if (webView == null) createWebView();
 
         navigationHistory.clear();
         lastBlockedUrl = "";
         recordNavigation(HOME_URL, "RETRY / START");
-
         mainFrameLoadFailed = false;
         hideError();
         webView.loadUrl(HOME_URL);
     }
 
     private void hideError() {
-        if (errorLayout != null) {
-            errorLayout.setVisibility(View.GONE);
-        }
-
-        if (webView != null) {
-            webView.setVisibility(View.VISIBLE);
-        }
+        if (errorLayout != null) errorLayout.setVisibility(View.GONE);
+        if (webView != null) webView.setVisibility(View.VISIBLE);
     }
 
     private void showError(String message) {
-        if (errorText == null || errorLayout == null) {
-            return;
-        }
+        if (errorText == null || errorLayout == null) return;
 
         errorText.setText(message);
         copyButton.setText("Copy diagnostic details");
-
-        if (webView != null) {
-            webView.setVisibility(View.GONE);
-        }
-
+        if (webView != null) webView.setVisibility(View.GONE);
         errorLayout.setVisibility(View.VISIBLE);
     }
 
@@ -480,26 +693,15 @@ public class MainActivity extends Activity {
                 (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
 
         if (clipboard == null) {
-            Toast.makeText(
-                    this,
-                    "Clipboard unavailable.",
-                    Toast.LENGTH_LONG
-            ).show();
+            Toast.makeText(this, "Clipboard unavailable.", Toast.LENGTH_LONG).show();
             return;
         }
 
         clipboard.setPrimaryClip(ClipData.newPlainText(
-                "Website app diagnostics",
-                errorText.getText().toString()
-        ));
-
+                "Website app diagnostics", errorText.getText().toString()));
         copyButton.setText("Copied!");
-
-        Toast.makeText(
-                this,
-                "Diagnostic details copied. Paste them into ChatGPT.",
-                Toast.LENGTH_LONG
-        ).show();
+        Toast.makeText(this, "Diagnostic details copied. Paste them into ChatGPT.",
+                Toast.LENGTH_LONG).show();
     }
 
     private void showInitialError(String message) {
@@ -515,16 +717,13 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (errorLayout != null
-                && errorLayout.getVisibility() == View.VISIBLE) {
-
+        if (errorLayout != null && errorLayout.getVisibility() == View.VISIBLE) {
             if (webView != null && webView.canGoBack()) {
                 hideError();
                 webView.goBack();
             } else {
                 super.onBackPressed();
             }
-
         } else if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
@@ -535,7 +734,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
-
         if (webView != null) {
             Bundle webState = new Bundle();
             webView.saveState(webState);
@@ -545,11 +743,20 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (pendingWebPermission != null) {
+            pendingWebPermission.deny();
+            pendingWebPermission = null;
+        }
+        if (pendingGeoCallback != null) {
+            pendingGeoCallback.invoke(pendingGeoOrigin, false, false);
+            pendingGeoCallback = null;
+        }
+        finishFileChooser(null);
+
         if (webView != null) {
             webView.destroy();
             webView = null;
         }
-
         super.onDestroy();
     }
 }
