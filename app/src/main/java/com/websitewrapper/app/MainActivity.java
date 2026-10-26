@@ -24,7 +24,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 public class MainActivity extends Activity {
 
@@ -39,6 +41,9 @@ public class MainActivity extends Activity {
     private String allowedHost;
     private boolean mainFrameLoadFailed = false;
 
+    // Hosts visited during the current page flow.
+    private final Set<String> flowHosts = new HashSet<>();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,13 +53,12 @@ public class MainActivity extends Activity {
 
         if (host == null || host.isEmpty()
                 || !"https".equalsIgnoreCase(homeUri.getScheme())) {
-            showInitialError(
-                    "Invalid website address.\n\n" + HOME_URL
-            );
+            showInitialError("Invalid website address.\n\n" + HOME_URL);
             return;
         }
 
         allowedHost = normalizeHost(host);
+        flowHosts.add(allowedHost);
 
         buildLayout();
         createWebView();
@@ -93,15 +97,12 @@ public class MainActivity extends Activity {
         errorLayout.setVisibility(View.GONE);
 
         ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(false);
-
         errorText = new TextView(this);
         errorText.setTextColor(Color.DKGRAY);
         errorText.setTextSize(16);
         errorText.setGravity(Gravity.CENTER);
         errorText.setTextIsSelectable(true);
         errorText.setText("Website diagnostic information will appear here.");
-
         scrollView.addView(errorText);
 
         errorLayout.addView(scrollView, new LinearLayout.LayoutParams(
@@ -125,23 +126,16 @@ public class MainActivity extends Activity {
 
     private void createWebView() {
         webView = new WebView(this);
-
         rootLayout.removeAllViews();
 
         rootLayout.addView(webView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1
         ));
-
         rootLayout.addView(errorLayout, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1
         ));
 
         WebSettings settings = webView.getSettings();
-
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
@@ -151,60 +145,33 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            settings.setMixedContentMode(
-                    WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            );
-
-            CookieManager.getInstance()
-                    .setAcceptThirdPartyCookies(webView, true);
+            settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
         }
 
         webView.setWebChromeClient(new WebChromeClient());
 
         webView.setWebViewClient(new WebViewClient() {
-
             @Override
             public boolean shouldOverrideUrlLoading(
-                    WebView view,
-                    WebResourceRequest request
-            ) {
+                    WebView view, WebResourceRequest request) {
+
                 if (!request.isForMainFrame()) {
-                    // Allow embedded resources to load from other domains.
                     return false;
                 }
 
-                Uri target = request.getUrl();
-
-                if (!isOriginalSite(target)) {
-                    showBlockedNavigation(target);
-                    return true;
-                }
-
-                return false;
+                return handleMainFrameNavigation(request.getUrl());
             }
 
             @SuppressWarnings("deprecation")
             @Override
-            public boolean shouldOverrideUrlLoading(
-                    WebView view,
-                    String url
-            ) {
-                Uri target = Uri.parse(url);
-
-                if (!isOriginalSite(target)) {
-                    showBlockedNavigation(target);
-                    return true;
-                }
-
-                return false;
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleMainFrameNavigation(Uri.parse(url));
             }
 
             @Override
             public void onPageStarted(
-                    WebView view,
-                    String url,
-                    android.graphics.Bitmap favicon
-            ) {
+                    WebView view, String url, android.graphics.Bitmap favicon) {
                 mainFrameLoadFailed = false;
                 hideError();
             }
@@ -220,21 +187,15 @@ public class MainActivity extends Activity {
             public void onReceivedError(
                     WebView view,
                     WebResourceRequest request,
-                    WebResourceError error
-            ) {
+                    WebResourceError error) {
                 if (request.isForMainFrame()) {
                     mainFrameLoadFailed = true;
-
                     showError(
                             "The website could not be loaded."
-                                    + "\n\nError code: "
-                                    + error.getErrorCode()
-                                    + "\nDescription: "
-                                    + error.getDescription()
-                                    + "\n\nFailing address:\n"
-                                    + request.getUrl()
-                                    + "\n\nConfigured website:\n"
-                                    + HOME_URL
+                                    + "\n\nError code: " + error.getErrorCode()
+                                    + "\nDescription: " + error.getDescription()
+                                    + "\n\nFailing address:\n" + request.getUrl()
+                                    + "\n\nConfigured website:\n" + HOME_URL
                     );
                 }
             }
@@ -242,21 +203,15 @@ public class MainActivity extends Activity {
             @SuppressWarnings("deprecation")
             @Override
             public void onReceivedError(
-                    WebView view,
-                    int errorCode,
-                    String description,
-                    String failingUrl
-            ) {
+                    WebView view, int errorCode, String description, String failingUrl) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                     mainFrameLoadFailed = true;
-
                     showError(
                             "The website could not be loaded."
                                     + "\n\nError code: " + errorCode
                                     + "\nDescription: " + description
                                     + "\n\nFailing address:\n" + failingUrl
-                                    + "\n\nConfigured website:\n"
-                                    + HOME_URL
+                                    + "\n\nConfigured website:\n" + HOME_URL
                     );
                 }
             }
@@ -265,84 +220,81 @@ public class MainActivity extends Activity {
             public void onReceivedHttpError(
                     WebView view,
                     WebResourceRequest request,
-                    WebResourceResponse response
-            ) {
-                if (request.isForMainFrame()
-                        && response.getStatusCode() >= 400) {
+                    WebResourceResponse response) {
+                if (request.isForMainFrame() && response.getStatusCode() >= 400) {
                     mainFrameLoadFailed = true;
-
                     showError(
                             "The website returned an HTTP error."
-                                    + "\n\nHTTP status: "
-                                    + response.getStatusCode()
-                                    + "\nReason: "
-                                    + response.getReasonPhrase()
-                                    + "\n\nFailing address:\n"
-                                    + request.getUrl()
-                                    + "\n\nConfigured website:\n"
-                                    + HOME_URL
+                                    + "\n\nHTTP status: " + response.getStatusCode()
+                                    + "\nReason: " + response.getReasonPhrase()
+                                    + "\n\nFailing address:\n" + request.getUrl()
+                                    + "\n\nConfigured website:\n" + HOME_URL
                     );
                 }
             }
 
             @Override
             public boolean onRenderProcessGone(
-                    WebView view,
-                    RenderProcessGoneDetail detail
-            ) {
-                showError(
-                        "The website renderer stopped unexpectedly."
-                                + "\n\nDid crash: "
-                                + detail.didCrash()
-                                + "\nRenderer priority at exit: "
-                                + detail.rendererPriorityAtExit()
-                                + "\n\nConfigured website:\n"
-                                + HOME_URL
-                                + "\n\nTap Try again to reload."
-                );
-
+                    WebView view, RenderProcessGoneDetail detail) {
                 rootLayout.removeView(view);
                 view.destroy();
                 webView = null;
 
+                showError(
+                        "The website renderer stopped unexpectedly."
+                                + "\n\nDid crash: " + detail.didCrash()
+                                + "\nRenderer priority at exit: "
+                                + detail.rendererPriorityAtExit()
+                                + "\n\nConfigured website:\n" + HOME_URL
+                                + "\n\nTap Try again to reload."
+                );
                 return true;
             }
         });
     }
 
-    private boolean isOriginalSite(Uri uri) {
-        if (uri == null || uri.getHost() == null) {
+    private boolean handleMainFrameNavigation(Uri target) {
+        if (target == null || target.getHost() == null
+                || !"https".equalsIgnoreCase(target.getScheme())) {
+            showBlockedNavigation(target, "Only HTTPS navigation is allowed.");
+            return true;
+        }
+
+        String host = normalizeHost(target.getHost());
+
+        // Original website and its subdomains are always permitted.
+        if (isOriginalSite(target)) {
+            flowHosts.add(host);
             return false;
         }
 
-        // Only HTTPS pages are permitted as the main page.
-        if (!"https".equalsIgnoreCase(uri.getScheme())) {
+        /*
+         * Allow cross-domain navigation during this page flow.
+         * The destination is recorded so subsequent redirects through
+         * the same destination can continue. This is not a perfect way
+         * to distinguish redirects from user-clicked links.
+         */
+        flowHosts.add(host);
+        return false;
+    }
+
+    private boolean isOriginalSite(Uri uri) {
+        if (uri == null || uri.getHost() == null
+                || !"https".equalsIgnoreCase(uri.getScheme())) {
             return false;
         }
 
         String host = normalizeHost(uri.getHost());
-
-        // Permit the configured domain and its subdomains only.
-        return host.equals(allowedHost)
-                || host.endsWith("." + allowedHost);
+        return host.equals(allowedHost) || host.endsWith("." + allowedHost);
     }
 
-    private void showBlockedNavigation(Uri target) {
+    private void showBlockedNavigation(Uri target, String reason) {
         mainFrameLoadFailed = true;
-
         showError(
                 "NAVIGATION BLOCKED"
-                        + "\n\nThe website tried to open an address "
-                        + "outside the permitted domain."
-                        + "\n\nBlocked address:\n"
-                        + target
-                        + "\n\nPermitted domain:\n"
-                        + allowedHost
-                        + "\n\nConfigured website:\n"
-                        + HOME_URL
-                        + "\n\nThis may be a legitimate redirect "
-                        + "required by the website. The app has not "
-                        + "automatically allowed it."
+                        + "\n\nReason: " + reason
+                        + "\n\nAddress:\n" + target
+                        + "\n\nConfigured website:\n" + HOME_URL
         );
     }
 
@@ -351,6 +303,8 @@ public class MainActivity extends Activity {
             createWebView();
         }
 
+        flowHosts.clear();
+        flowHosts.add(allowedHost);
         mainFrameLoadFailed = false;
         hideError();
         webView.loadUrl(HOME_URL);
@@ -360,7 +314,6 @@ public class MainActivity extends Activity {
         if (errorLayout != null) {
             errorLayout.setVisibility(View.GONE);
         }
-
         if (webView != null) {
             webView.setVisibility(View.VISIBLE);
         }
@@ -377,7 +330,6 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.setVisibility(View.GONE);
         }
-
         errorLayout.setVisibility(View.VISIBLE);
     }
 
@@ -386,28 +338,16 @@ public class MainActivity extends Activity {
                 (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
 
         if (clipboard == null) {
-            Toast.makeText(
-                    this,
-                    "Could not access clipboard. Please select and copy the text.",
-                    Toast.LENGTH_LONG
-            ).show();
+            Toast.makeText(this, "Clipboard unavailable.", Toast.LENGTH_LONG).show();
             return;
         }
 
-        String details = errorText.getText().toString();
-
-        ClipData clip = ClipData.newPlainText(
-                "Website app diagnostics",
-                details
-        );
-
-        clipboard.setPrimaryClip(clip);
+        clipboard.setPrimaryClip(ClipData.newPlainText(
+                "Website app diagnostics", errorText.getText().toString()));
 
         copyButton.setText("Copied!");
-
         Toast.makeText(
-                this,
-                "Diagnostic details copied. Paste them into ChatGPT.",
+                this, "Diagnostic details copied. Paste them into ChatGPT.",
                 Toast.LENGTH_LONG
         ).show();
     }
@@ -420,14 +360,12 @@ public class MainActivity extends Activity {
         messageView.setPadding(32, 32, 32, 32);
         messageView.setTextIsSelectable(true);
         messageView.setText(message);
-
         setContentView(messageView);
     }
 
     @Override
     public void onBackPressed() {
-        if (errorLayout != null
-                && errorLayout.getVisibility() == View.VISIBLE) {
+        if (errorLayout != null && errorLayout.getVisibility() == View.VISIBLE) {
             if (webView != null && webView.canGoBack()) {
                 hideError();
                 webView.goBack();
@@ -444,7 +382,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
-
         if (webView != null) {
             Bundle webState = new Bundle();
             webView.saveState(webState);
@@ -458,7 +395,6 @@ public class MainActivity extends Activity {
             webView.destroy();
             webView = null;
         }
-
         super.onDestroy();
     }
 }
