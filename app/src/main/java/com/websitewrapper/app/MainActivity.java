@@ -49,11 +49,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        allowedHost = host.toLowerCase(Locale.ROOT);
-
-        if (allowedHost.startsWith("www.")) {
-            allowedHost = allowedHost.substring(4);
-        }
+        allowedHost = normalizeHost(host);
 
         buildLayout();
         createWebView();
@@ -67,6 +63,16 @@ public class MainActivity extends Activity {
         } else {
             loadHome();
         }
+    }
+
+    private String normalizeHost(String host) {
+        String normalized = host.toLowerCase(Locale.ROOT);
+
+        if (normalized.startsWith("www.")) {
+            normalized = normalized.substring(4);
+        }
+
+        return normalized;
     }
 
     private void buildLayout() {
@@ -140,15 +146,20 @@ public class MainActivity extends Activity {
                     WebView view,
                     WebResourceRequest request
             ) {
-                // Embedded resources may load from other domains.
-                // Only restrict navigation of the main page.
                 if (!request.isForMainFrame()) {
+                    // Images, scripts, styles and other embedded resources
+                    // can load from their own domains.
                     return false;
                 }
 
-                // Main-frame navigation must stay on the original domain
-                // or one of its subdomains. Redirects get no exception.
-                return !isOriginalSite(request.getUrl());
+                Uri target = request.getUrl();
+
+                if (!isOriginalSite(target)) {
+                    showBlockedNavigation(target);
+                    return true;
+                }
+
+                return false;
             }
 
             @SuppressWarnings("deprecation")
@@ -157,9 +168,14 @@ public class MainActivity extends Activity {
                     WebView view,
                     String url
             ) {
-                // Older Android versions do not expose isForMainFrame()
-                // in this callback, so apply the domain rule here.
-                return !isOriginalSite(Uri.parse(url));
+                Uri target = Uri.parse(url);
+
+                if (!isOriginalSite(target)) {
+                    showBlockedNavigation(target);
+                    return true;
+                }
+
+                return false;
             }
 
             @Override
@@ -190,7 +206,7 @@ public class MainActivity extends Activity {
 
                     showError(
                             "The website could not be loaded.\n\n"
-                                    + error.getDescription()
+                                    + "Error: " + error.getDescription()
                                     + "\n\nAddress:\n"
                                     + request.getUrl()
                     );
@@ -210,7 +226,7 @@ public class MainActivity extends Activity {
 
                     showError(
                             "The website could not be loaded.\n\n"
-                                    + description
+                                    + "Error: " + description
                                     + "\n\nAddress:\n"
                                     + failingUrl
                     );
@@ -228,8 +244,8 @@ public class MainActivity extends Activity {
                     mainFrameLoadFailed = true;
 
                     showError(
-                            "The website returned an error.\n\n"
-                                    + "HTTP status: "
+                            "The website returned an HTTP error.\n\n"
+                                    + "Status: "
                                     + response.getStatusCode()
                                     + "\n\nAddress:\n"
                                     + request.getUrl()
@@ -258,19 +274,31 @@ public class MainActivity extends Activity {
             return false;
         }
 
-        // Only HTTPS pages are allowed in the main frame.
+        // Main-page navigation must use HTTPS.
         if (!"https".equalsIgnoreCase(uri.getScheme())) {
             return false;
         }
 
-        String host = uri.getHost().toLowerCase(Locale.ROOT);
+        String host = normalizeHost(uri.getHost());
 
-        if (host.startsWith("www.")) {
-            host = host.substring(4);
-        }
-
+        // Allow only the configured domain and its subdomains.
         return host.equals(allowedHost)
                 || host.endsWith("." + allowedHost);
+    }
+
+    private void showBlockedNavigation(Uri target) {
+        mainFrameLoadFailed = true;
+
+        showError(
+                "Navigation was blocked by this app's website restriction."
+                        + "\n\nThe website tried to open:\n"
+                        + target
+                        + "\n\nThe app currently allows only:\n"
+                        + allowedHost
+                        + "\n\nIf this is a legitimate redirect required "
+                        + "by the website, the restriction may need to be "
+                        + "adjusted."
+        );
     }
 
     private void loadHome() {
