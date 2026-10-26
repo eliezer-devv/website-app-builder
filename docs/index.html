@@ -25,7 +25,6 @@
     }
 
     h1 { margin-top: 0; font-size: 27px; }
-
     p { line-height: 1.5; color: #526078; }
 
     label {
@@ -34,12 +33,18 @@
       margin: 18px 0 7px;
     }
 
-    input {
+    input, textarea {
       width: 100%;
       padding: 12px;
       border: 1px solid #ccd3df;
       border-radius: 9px;
       font: inherit;
+    }
+
+    textarea {
+      min-height: 150px;
+      resize: vertical;
+      font-family: ui-monospace, monospace;
     }
 
     button {
@@ -134,20 +139,18 @@
       Choose a square image if possible. PNG is recommended.
     </p>
 
-    <label for="rulesFile">Additional allowed hostnames (optional)</label>
-    <input
-      id="rulesFile"
-      type="file"
-      accept=".txt,text/plain"
-    >
+    <label for="allowedHosts">Additional allowed hostnames (optional)</label>
+    <textarea
+      id="allowedHosts"
+      placeholder="login.example.org&#10;cdn.example.org&#10;forms.example.net"
+      spellcheck="false"
+      autocapitalize="off"
+    ></textarea>
     <p class="hint">
-      Upload a plain-text .txt file, up to 20 KB. Put one hostname per
-      line. Blank lines and lines beginning with # are ignored.
-      Example: login.example.org
-    </p>
-    <p class="hint">
-      These hosts will be allowed in addition to the original website
-      and its subdomains. Only add hosts you trust.
+      Enter one hostname per line. You can also paste a comma-separated
+      list. Blank lines and lines beginning with # are ignored.
+      Enter hostnames only — no https://, paths, ports, or wildcards.
+      The original website and its subdomains are allowed automatically.
     </p>
 
     <button id="buildButton" type="submit">Build APK</button>
@@ -215,45 +218,28 @@
     return /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value);
   }
 
-  function readFileAsBase64(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
+  function validateAndNormalizeHosts(text) {
+    const pattern =
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/;
 
-      reader.onload = () => {
-        const result = String(reader.result);
-        const comma = result.indexOf(",");
+    const hosts = new Set();
 
-        if (comma < 0) {
-          reject(new Error("Could not read the selected file."));
-          return;
-        }
+    for (const [index, rawLine] of text.split(/[\r\n,]+/).entries()) {
+      const host = rawLine.trim().toLowerCase();
 
-        resolve(result.slice(comma + 1));
-      };
+      if (!host || host.startsWith("#")) continue;
 
-      reader.onerror = () => reject(
-        new Error("Could not read the selected file.")
-      );
-
-      reader.readAsDataURL(file);
-    });
-  }
-
-  async function uploadFile(path, file, message, branch) {
-    const base64 = await readFileAsBase64(file);
-
-    await api(
-      "/repos/" + OWNER + "/" + REPO + "/contents/" +
-      path.split("/").map(encodeURIComponent).join("/"),
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          message,
-          content: base64,
-          branch
-        })
+      if (!pattern.test(host)) {
+        throw new Error(
+          "Invalid hostname on line " + (index + 1) + ": " + rawLine +
+          "\nUse a hostname only, without protocol, path, port, or wildcard."
+        );
       }
-    );
+
+      hosts.add(host);
+    }
+
+    return [...hosts].sort();
   }
 
   form.addEventListener("submit", async event => {
@@ -271,7 +257,17 @@
     const appName = document.getElementById("appName").value.trim();
     const packageName = document.getElementById("packageName").value.trim();
     const iconFile = document.getElementById("icon").files[0];
-    const rulesFile = document.getElementById("rulesFile").files[0];
+    const hostsText = document.getElementById("allowedHosts").value;
+
+    let allowedHosts;
+
+    try {
+      allowedHosts = validateAndNormalizeHosts(hostsText);
+    } catch (error) {
+      setStatus(error.message);
+      clearToken();
+      return;
+    }
 
     let parsedUrl;
 
@@ -283,14 +279,9 @@
       return;
     }
 
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      setStatus("The website URL must start with http:// or https://.");
-      clearToken();
-      return;
-    }
-
-    if (!parsedUrl.hostname) {
-      setStatus("The website URL must contain a hostname.");
+    if (!["http:", "https:"].includes(parsedUrl.protocol) ||
+        !parsedUrl.hostname) {
+      setStatus("Enter a valid HTTP or HTTPS website URL.");
       clearToken();
       return;
     }
@@ -309,41 +300,19 @@
       return;
     }
 
-    if (rulesFile) {
-      if (!rulesFile.name.toLowerCase().endsWith(".txt")) {
-        setStatus("The hostname rules file must be a .txt file.");
-        clearToken();
-        return;
-      }
-
-      if (rulesFile.size > 20 * 1024) {
-        setStatus("The hostname rules file must be no larger than 20 KB.");
-        clearToken();
-        return;
-      }
-    }
-
     button.disabled = true;
-
-    let branch = "";
-    let runId = "";
 
     try {
       setStatus("Checking GitHub access…");
 
-      runId = Date.now().toString();
-      branch = "web-build-" + runId;
+      const runId = Date.now().toString();
+      const branch = "web-build-" + runId;
 
       const extension =
         iconFile.type === "image/jpeg" ? "jpg" :
         iconFile.type === "image/webp" ? "webp" : "png";
 
-      const iconPath =
-        "web-build-icons/icon-" + runId + "." + extension;
-
-      const rulesPath = rulesFile
-        ? "web-build-icons/rules-" + runId + ".txt"
-        : "";
+      const iconPath = "web-build-icons/icon-" + runId + "." + extension;
 
       const repo = await api("/repos/" + OWNER + "/" + REPO);
       const baseBranch = repo.default_branch;
@@ -363,23 +332,26 @@
 
       setStatus("Uploading app icon…");
 
-      await uploadFile(
-        iconPath,
-        iconFile,
-        "Upload icon for web build " + runId,
-        branch
-      );
-
-      if (rulesFile) {
-        setStatus("Uploading hostname rules…");
-
-        await uploadFile(
-          rulesPath,
-          rulesFile,
-          "Upload hostname rules for web build " + runId,
-          branch
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = () => reject(
+          new Error("Could not read the selected icon.")
         );
-      }
+        reader.readAsDataURL(iconFile);
+      });
+
+      await api(
+        "/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            message: "Upload icon for web build " + runId,
+            content: base64,
+            branch
+          })
+        }
+      );
 
       setStatus("Starting Android build…");
 
@@ -395,7 +367,7 @@
               app_name: appName,
               package_name: packageName,
               icon_path: iconPath,
-              custom_rules_path: rulesPath,
+              allowed_hosts: allowedHosts.join(","),
               request_id: runId
             }
           })
