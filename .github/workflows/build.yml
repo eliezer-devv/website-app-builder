@@ -19,6 +19,10 @@ on:
         description: "Uploaded app icon path"
         required: true
         type: string
+      custom_rules_path:
+        description: "Optional uploaded hostname rules file"
+        required: false
+        type: string
       request_id:
         description: "Unique build ID"
         required: true
@@ -54,6 +58,7 @@ jobs:
           APP_NAME: ${{ inputs.app_name }}
           PACKAGE_NAME: ${{ inputs.package_name }}
           ICON_PATH: ${{ inputs.icon_path }}
+          CUSTOM_RULES_PATH: ${{ inputs.custom_rules_path }}
           REQUEST_ID: ${{ inputs.request_id }}
         run: |
           set -euo pipefail
@@ -63,13 +68,18 @@ jobs:
           import re
           from urllib.parse import urlparse
 
-          url = os.environ["WEBSITE_URL"]
+          url = os.environ["WEBSITE_URL"].strip()
           parsed = urlparse(url)
 
-          if parsed.scheme not in ("http", "https") or not parsed.netloc:
+          if parsed.scheme not in ("http", "https") or not parsed.hostname:
               raise SystemExit("Invalid website URL")
 
-          package = os.environ["PACKAGE_NAME"]
+          try:
+              parsed.port
+          except ValueError:
+              raise SystemExit("Invalid website URL port")
+
+          package = os.environ["PACKAGE_NAME"].strip()
           if not re.fullmatch(
               r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+",
               package
@@ -97,6 +107,58 @@ jobs:
             printf 'app_name=%s\n' "$APP_NAME"
             printf 'home_url=%s\n' "$WEBSITE_URL"
           } > app-config.properties
+
+          python3 - <<'PY'
+          import os
+          import re
+
+          path = os.environ.get("CUSTOM_RULES_PATH", "").strip()
+          hosts = set()
+
+          if path:
+              if not re.fullmatch(r"[A-Za-z0-9._/-]+", path):
+                  raise SystemExit("Invalid custom rules file path")
+
+              if not os.path.isfile(path):
+                  raise SystemExit(
+                      "Custom rules file was not found: " + path
+                  )
+
+              if os.path.getsize(path) > 20 * 1024:
+                  raise SystemExit(
+                      "Custom rules file must be no larger than 20 KB"
+                  )
+
+              hostname_pattern = re.compile(
+                  r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+                  r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+              )
+
+              with open(path, "r", encoding="utf-8-sig") as rules:
+                  for line_number, raw_line in enumerate(rules, 1):
+                      host = raw_line.strip().lower()
+
+                      if not host or host.startswith("#"):
+                          continue
+
+                      if not hostname_pattern.fullmatch(host):
+                          raise SystemExit(
+                              f"Invalid hostname on line {line_number}: "
+                              f"{raw_line.strip()!r}. Use only a hostname, "
+                              "without protocol, path, port, or wildcard."
+                          )
+
+                      hosts.add(host)
+
+          allowed_hosts = ",".join(sorted(hosts))
+
+          with open("app-config.properties", "a", encoding="utf-8") as config:
+              config.write("allowed_hosts=" + allowed_hosts + "\n")
+
+          print("Custom hostname rules loaded:", len(hosts))
+          for host in sorted(hosts):
+              print("  " + host)
+          PY
 
       - name: Generate app icons
         run: |
