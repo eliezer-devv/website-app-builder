@@ -6,6 +6,7 @@
   <title>Website APK Builder</title>
   <style>
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       padding: 24px 16px;
@@ -13,6 +14,7 @@
       background: #f3f5f9;
       color: #172033;
     }
+
     main {
       max-width: 560px;
       margin: 20px auto;
@@ -21,13 +23,17 @@
       border-radius: 18px;
       box-shadow: 0 8px 30px #18274612;
     }
+
     h1 { margin-top: 0; font-size: 27px; }
+
     p { line-height: 1.5; color: #526078; }
+
     label {
       display: block;
       font-weight: 650;
       margin: 18px 0 7px;
     }
+
     input {
       width: 100%;
       padding: 12px;
@@ -35,6 +41,7 @@
       border-radius: 9px;
       font: inherit;
     }
+
     button {
       width: 100%;
       margin-top: 24px;
@@ -47,7 +54,9 @@
       font-weight: 700;
       cursor: pointer;
     }
+
     button:disabled { opacity: .55; cursor: wait; }
+
     #status {
       margin-top: 20px;
       padding: 14px;
@@ -56,11 +65,13 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+
     #download {
       display: block;
       margin-top: 14px;
       font-weight: 700;
     }
+
     .hint { font-size: 13px; }
   </style>
 </head>
@@ -81,15 +92,25 @@
       required
     >
     <p class="hint">
-      Use a fine-grained token limited to the website-app-builder repository.
-      The token is cleared after the build attempt.
+      Use a fine-grained token limited to the website-app-builder
+      repository. The token is cleared after the build attempt.
     </p>
 
     <label for="website">Website URL</label>
-    <input id="website" type="url" placeholder="https://example.com" required>
+    <input
+      id="website"
+      type="url"
+      placeholder="https://example.com"
+      required
+    >
 
     <label for="appName">App name</label>
-    <input id="appName" maxlength="40" placeholder="My Website" required>
+    <input
+      id="appName"
+      maxlength="40"
+      placeholder="My Website"
+      required
+    >
 
     <label for="packageName">Package name</label>
     <input
@@ -103,8 +124,31 @@
     </p>
 
     <label for="icon">App icon</label>
-    <input id="icon" type="file" accept="image/png,image/jpeg,image/webp" required>
-    <p class="hint">Choose a square image if possible. PNG is recommended.</p>
+    <input
+      id="icon"
+      type="file"
+      accept="image/png,image/jpeg,image/webp"
+      required
+    >
+    <p class="hint">
+      Choose a square image if possible. PNG is recommended.
+    </p>
+
+    <label for="rulesFile">Additional allowed hostnames (optional)</label>
+    <input
+      id="rulesFile"
+      type="file"
+      accept=".txt,text/plain"
+    >
+    <p class="hint">
+      Upload a plain-text .txt file, up to 20 KB. Put one hostname per
+      line. Blank lines and lines beginning with # are ignored.
+      Example: login.example.org
+    </p>
+    <p class="hint">
+      These hosts will be allowed in addition to the original website
+      and its subdomains. Only add hosts you trust.
+    </p>
 
     <button id="buildButton" type="submit">Build APK</button>
   </form>
@@ -148,10 +192,12 @@
     if (!response.ok) {
       const message = await response.text();
       let detail = message;
+
       try {
         const parsed = JSON.parse(message);
         detail = parsed.message || message;
       } catch (_) {}
+
       throw new Error(
         "GitHub API error (" + response.status + "): " + detail
       );
@@ -169,11 +215,53 @@
     return /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value);
   }
 
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+
+      reader.onload = () => {
+        const result = String(reader.result);
+        const comma = result.indexOf(",");
+
+        if (comma < 0) {
+          reject(new Error("Could not read the selected file."));
+          return;
+        }
+
+        resolve(result.slice(comma + 1));
+      };
+
+      reader.onerror = () => reject(
+        new Error("Could not read the selected file.")
+      );
+
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadFile(path, file, message, branch) {
+    const base64 = await readFileAsBase64(file);
+
+    await api(
+      "/repos/" + OWNER + "/" + REPO + "/contents/" +
+      path.split("/").map(encodeURIComponent).join("/"),
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          message,
+          content: base64,
+          branch
+        })
+      }
+    );
+  }
+
   form.addEventListener("submit", async event => {
     event.preventDefault();
     download.hidden = true;
 
     githubToken = tokenInput.value.trim();
+
     if (!githubToken) {
       setStatus("Enter your GitHub token.");
       return;
@@ -183,8 +271,10 @@
     const appName = document.getElementById("appName").value.trim();
     const packageName = document.getElementById("packageName").value.trim();
     const iconFile = document.getElementById("icon").files[0];
+    const rulesFile = document.getElementById("rulesFile").files[0];
 
     let parsedUrl;
+
     try {
       parsedUrl = new URL(website);
     } catch (_) {
@@ -199,8 +289,16 @@
       return;
     }
 
+    if (!parsedUrl.hostname) {
+      setStatus("The website URL must contain a hostname.");
+      clearToken();
+      return;
+    }
+
     if (!safePackageName(packageName)) {
-      setStatus("Enter a valid package name, such as com.example.mywebsite.");
+      setStatus(
+        "Enter a valid package name, such as com.example.mywebsite."
+      );
       clearToken();
       return;
     }
@@ -211,19 +309,41 @@
       return;
     }
 
+    if (rulesFile) {
+      if (!rulesFile.name.toLowerCase().endsWith(".txt")) {
+        setStatus("The hostname rules file must be a .txt file.");
+        clearToken();
+        return;
+      }
+
+      if (rulesFile.size > 20 * 1024) {
+        setStatus("The hostname rules file must be no larger than 20 KB.");
+        clearToken();
+        return;
+      }
+    }
+
     button.disabled = true;
+
+    let branch = "";
+    let runId = "";
 
     try {
       setStatus("Checking GitHub access…");
 
-      const runId = Date.now().toString();
-      const branch = "web-build-" + runId;
+      runId = Date.now().toString();
+      branch = "web-build-" + runId;
 
       const extension =
         iconFile.type === "image/jpeg" ? "jpg" :
         iconFile.type === "image/webp" ? "webp" : "png";
 
-      const iconPath = "web-build-icons/icon-" + runId + "." + extension;
+      const iconPath =
+        "web-build-icons/icon-" + runId + "." + extension;
+
+      const rulesPath = rulesFile
+        ? "web-build-icons/rules-" + runId + ".txt"
+        : "";
 
       const repo = await api("/repos/" + OWNER + "/" + REPO);
       const baseBranch = repo.default_branch;
@@ -241,23 +361,25 @@
         })
       });
 
-      setStatus("Uploading icon…");
+      setStatus("Uploading app icon…");
 
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result.split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(iconFile);
-      });
+      await uploadFile(
+        iconPath,
+        iconFile,
+        "Upload icon for web build " + runId,
+        branch
+      );
 
-      await api("/repos/" + OWNER + "/" + REPO + "/contents/" + iconPath, {
-        method: "PUT",
-        body: JSON.stringify({
-          message: "Upload icon for web build " + runId,
-          content: base64,
+      if (rulesFile) {
+        setStatus("Uploading hostname rules…");
+
+        await uploadFile(
+          rulesPath,
+          rulesFile,
+          "Upload hostname rules for web build " + runId,
           branch
-        })
-      });
+        );
+      }
 
       setStatus("Starting Android build…");
 
@@ -273,6 +395,7 @@
               app_name: appName,
               package_name: packageName,
               icon_path: iconPath,
+              custom_rules_path: rulesPath,
               request_id: runId
             }
           })
@@ -347,7 +470,9 @@
       }
 
       if (!release) {
-        throw new Error("Build succeeded, but its APK release was not found.");
+        throw new Error(
+          "Build succeeded, but its APK release was not found."
+        );
       }
 
       const apk = release.assets.find(asset => asset.name.endsWith(".apk"));
