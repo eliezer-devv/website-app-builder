@@ -61,9 +61,10 @@ public class MainActivity extends Activity {
     private static final String ALLOWED_HOSTS = BuildConfig.ALLOWED_HOSTS;
 
     private static final int REQUEST_WEB_PERMISSIONS = 2101;
-    private static final int REQUEST_GEOLOCATION = 2102;
-    private static final int REQUEST_FILE_CHOOSER = 2103;
-    private static final int REQUEST_SAVE_LOG = 2104;
+private static final int REQUEST_GEOLOCATION = 2102;
+private static final int REQUEST_FILE_CHOOSER = 2103;
+private static final int REQUEST_SAVE_LOG = 2104;
+private static final int REQUEST_CAMERA_CAPTURE = 2105;
     private static final int MAX_LOG_BYTES = 262144;
 
     private WebView webView;
@@ -85,7 +86,8 @@ public class MainActivity extends Activity {
     private GeolocationPermissions.Callback pendingGeoCallback;
     private String pendingGeoOrigin;
     private ValueCallback<Uri[]> filePathCallback;
-    private Uri cameraPhotoUri;
+private Uri cameraPhotoUri;
+private File cameraPhotoFile;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -708,54 +710,94 @@ private void clearLog() {
      * Opens the website's file picker and adds a camera option.
      * Keeps the MIME type and accepted file types requested by the website.
      */
+
     private void openFileChooser(WebChromeClient.FileChooserParams params) {
-        logEvent("FILE_CHOOSER_OPEN",
-        "Accept types=" + java.util.Arrays.toString(
-                params == null ? null : params.getAcceptTypes()));
-        Intent contentIntent;
+    logEvent("FILE_CHOOSER_OPEN",
+            "Accept types=" + java.util.Arrays.toString(
+                    params == null ? null : params.getAcceptTypes()));
 
-        try {
-            contentIntent = params.createIntent();
-            contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-        } catch (Exception e) {
-            contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
-            contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-            contentIntent.setType("*/*");
-        }
+    Intent contentIntent;
 
-        boolean acceptsImages = acceptsImages(params);
-        logEvent("CAMERA_CHECK", "Accepts images=" + acceptsImages);
-        Intent cameraIntent = acceptsImages ? createCameraIntent() : null;
-
-        try {
-            if (cameraIntent != null) {
-                Intent chooser = Intent.createChooser(
-                        contentIntent, "Choose a file or take a picture");
-                chooser.putExtra(
-                        Intent.EXTRA_INITIAL_INTENTS,
-                        new Intent[]{cameraIntent});
-
-                logEvent("CAMERA_LAUNCH_ATTEMPT",
-        "Launching chooser; camera URI=" + cameraPhotoUri);
-                startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
-            } else {
-                startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
-            }
-        } catch (ActivityNotFoundException e) {
-            try {
-                Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
-                fallback.addCategory(Intent.CATEGORY_OPENABLE);
-                fallback.setType("*/*");
-                startActivityForResult(fallback, REQUEST_FILE_CHOOSER);
-            } catch (ActivityNotFoundException ignored) {
-                finishFileChooser(null);
-                cameraPhotoUri = null;
-                Toast.makeText(this, "No file picker is available.",
-                        Toast.LENGTH_LONG).show();
-            }
-        }
+    try {
+        contentIntent = params.createIntent();
+        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+    } catch (Exception e) {
+        contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
+        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+        contentIntent.setType("*/*");
     }
 
+    boolean imagesAllowed = acceptsImages(params);
+    logEvent("CAMERA_CHECK", "Accepts images=" + imagesAllowed);
+
+    if (!imagesAllowed) {
+        launchContentPicker(contentIntent);
+        return;
+    }
+
+    new AlertDialog.Builder(this)
+            .setTitle("Add a picture")
+            .setItems(new String[]{
+                    "Take a photo",
+                    "Choose an existing file"
+            }, (dialog, which) -> {
+                if (which == 0) {
+                    launchCameraDirectly();
+                } else {
+                    launchContentPicker(contentIntent);
+                }
+            })
+            .setOnCancelListener(dialog -> finishFileChooser(null))
+            .show();
+    }
+
+    private void launchContentPicker(Intent contentIntent) {
+    try {
+        startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
+        logEvent("CONTENT_PICKER_LAUNCH", "Picker launched");
+    } catch (ActivityNotFoundException e) {
+        try {
+            Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+            fallback.addCategory(Intent.CATEGORY_OPENABLE);
+            fallback.setType("*/*");
+            startActivityForResult(fallback, REQUEST_FILE_CHOOSER);
+            logEvent("CONTENT_PICKER_FALLBACK", "Fallback picker launched");
+        } catch (ActivityNotFoundException ignored) {
+            logEvent("CONTENT_PICKER_ERROR", "No file picker available");
+            finishFileChooser(null);
+            Toast.makeText(this, "No file picker is available.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+}
+
+private void launchCameraDirectly() {
+    Intent cameraIntent = createCameraIntent();
+
+    if (cameraIntent == null || cameraPhotoUri == null) {
+        logEvent("CAMERA_LAUNCH_ERROR", "Could not prepare camera");
+        Toast.makeText(this, "No usable camera is available.",
+                Toast.LENGTH_LONG).show();
+        finishFileChooser(null);
+        return;
+    }
+
+    try {
+        logEvent("CAMERA_LAUNCH_ATTEMPT",
+                "Launching camera directly; output URI=" + cameraPhotoUri);
+
+        startActivityForResult(cameraIntent, REQUEST_CAMERA_CAPTURE);
+    } catch (ActivityNotFoundException | SecurityException e) {
+        logEvent("CAMERA_LAUNCH_ERROR",
+                e + "\n" + android.util.Log.getStackTraceString(e));
+        cleanupCameraOutput();
+        finishFileChooser(null);
+
+        Toast.makeText(this, "Could not open the camera.",
+                Toast.LENGTH_LONG).show();
+    }
+}
+    
     private boolean acceptsImages(WebChromeClient.FileChooserParams params) {
         if (params == null) return true;
 
@@ -785,162 +827,181 @@ private void clearLog() {
     }
 
     private Intent createCameraIntent() {
-        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    cleanupCameraOutput();
 
-        if (intent.resolveActivity(getPackageManager()) == null) {
-            logEvent("CAMERA_UNAVAILABLE", "No camera handler found");
-            cameraPhotoUri = null;
-            return null;
-        }
+    Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
-        try {
-            File directory = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+    if (intent.resolveActivity(getPackageManager()) == null) {
+        logEvent("CAMERA_UNAVAILABLE", "No camera handler found");
+        return null;
+    }
 
-            if (directory == null) {
-                cameraPhotoUri = null;
-                return null;
-            }
+    try {
+        File directory =
+                getExternalFilesDir(Environment.DIRECTORY_PICTURES);
 
-            if (!directory.exists() && !directory.mkdirs()) {
-                cameraPhotoUri = null;
-                return null;
-            }
-
-            File photo = File.createTempFile(
-                    "website_photo_", ".jpg", directory);
-
-            cameraPhotoUri = FileProvider.getUriForFile(
-                    this, getPackageName() + ".fileprovider", photo);
-            logEvent("CAMERA_URI_CREATED", "URI=" + cameraPhotoUri);
-
-            int uriFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
-
-            intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-            intent.setClipData(
-                    ClipData.newRawUri("camera_photo", cameraPhotoUri));
-            intent.addFlags(uriFlags);
-
-            List<android.content.pm.ResolveInfo> cameraActivities =
-                    getPackageManager().queryIntentActivities(
-                            intent, PackageManager.MATCH_DEFAULT_ONLY);
-
-            for (android.content.pm.ResolveInfo info : cameraActivities) {
-                if (info.activityInfo != null) {
-                    grantUriPermission(
-                            info.activityInfo.packageName,
-                            cameraPhotoUri,
-                            uriFlags);
-                }
-            }
-
-            return intent;
-
-        } catch (IOException | IllegalArgumentException e) {
+        if (directory == null) {
             logEvent("CAMERA_INTENT_ERROR",
-        e + "\n" + android.util.Log.getStackTraceString(e));
-            cameraPhotoUri = null;
+                    "Pictures directory unavailable");
             return null;
         }
-    }
 
+        if (!directory.exists() && !directory.mkdirs()) {
+            logEvent("CAMERA_INTENT_ERROR",
+                    "Could not create pictures directory");
+            return null;
+        }
+
+        cameraPhotoFile = File.createTempFile(
+                "website_photo_", ".jpg", directory);
+
+        cameraPhotoUri = FileProvider.getUriForFile(
+                this,
+                getPackageName() + ".fileprovider",
+                cameraPhotoFile);
+
+        logEvent("CAMERA_URI_CREATED",
+                "URI=" + cameraPhotoUri);
+
+        int uriFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+        intent.setClipData(
+                ClipData.newRawUri("camera_photo", cameraPhotoUri));
+        intent.addFlags(uriFlags);
+
+        List<android.content.pm.ResolveInfo> cameraActivities =
+                getPackageManager().queryIntentActivities(
+                        intent, PackageManager.MATCH_DEFAULT_ONLY);
+
+        for (android.content.pm.ResolveInfo info : cameraActivities) {
+            if (info.activityInfo != null) {
+                grantUriPermission(
+                        info.activityInfo.packageName,
+                        cameraPhotoUri,
+                        uriFlags);
+            }
+        }
+
+        return intent;
+
+    } catch (IOException | IllegalArgumentException e) {
+        logEvent("CAMERA_INTENT_ERROR",
+                e + "\n" + android.util.Log.getStackTraceString(e));
+
+        cleanupCameraOutput();
+        return null;
+    }
+    }
+    
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_SAVE_LOG) {
-    if (resultCode == RESULT_OK && data != null
-            && data.getData() != null) {
-        try (OutputStream out =
-                     getContentResolver().openOutputStream(data.getData())) {
-            if (out == null) {
-                throw new IOException("Could not open destination");
-            }
-            out.write(readLog().getBytes(
-                    java.nio.charset.StandardCharsets.UTF_8));
-            Toast.makeText(this, "Diagnostic log saved.",
-                    Toast.LENGTH_LONG).show();
-            logEvent("LOG_EXPORT_SUCCESS", "Diagnostic log saved");
-        } catch (Exception e) {
-            logEvent("LOG_EXPORT_ERROR",
-                    e + "\n" + android.util.Log.getStackTraceString(e));
-            Toast.makeText(this, "Could not save log: " + e.getMessage(),
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-    return;
-        }
+protected void onActivityResult(
+        int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
 
-        if (requestCode == REQUEST_FILE_CHOOSER) {
-            logEvent("FILE_CHOOSER_RESULT",
-        "resultCode=" + resultCode
-        + ", selected URI=" + (data == null ? "null" : data.getData())
-        + ", camera URI=" + cameraPhotoUri);
-            Uri[] results = null;
-
-            if (resultCode == RESULT_OK) {
-    Uri selectedUri = null;
-
-    if (data != null && data.getData() != null) {
-        selectedUri = data.getData();
-        logEvent("PICKER_SELECTED_FILE",
-                "A file URI was returned");
-    } else if (cameraPhotoUri != null) {
-        File photoFile = new File(
-                getExternalFilesDir(Environment.DIRECTORY_PICTURES),
-                "");
-
-        String photoPath = cameraPhotoUri.getPath();
-        long photoBytes = -1;
-
-        try (java.io.InputStream in =
-                     getContentResolver().openInputStream(cameraPhotoUri)) {
-            if (in != null) {
-                photoBytes = in.available();
-            }
-        } catch (Exception e) {
-            logEvent("CAMERA_PHOTO_READ_ERROR", e.toString());
-        }
-
-        logEvent("CAMERA_RESULT_OK",
-                "Output URI exists; readable bytes reported="
-                        + photoBytes);
-
-        selectedUri = cameraPhotoUri;
-    } else {
-        logEvent("CAMERA_RESULT_MISSING_URI",
-                "Activity returned OK but no output URI exists");
-    }
-
-    if (selectedUri != null) {
-        results = new Uri[]{selectedUri};
-    }
-} else {
-    logEvent("PICKER_CANCELLED",
-            "resultCode=" + resultCode
-                    + "; camera output URI was "
-                    + (cameraPhotoUri == null ? "null" : "available"));
-            }
-
-            logEvent("FILE_CHOOSER_CALLBACK",
-        "Result URI=" + (results == null || results.length == 0
-                ? "null" : results[0]));
-            finishFileChooser(results);
-
-            if (cameraPhotoUri != null) {
-                try {
-                    revokeUriPermission(
-                            cameraPhotoUri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                } catch (Exception ignored) {
-                    // The temporary URI grant may already have been revoked.
+    if (requestCode == REQUEST_SAVE_LOG) {
+        if (resultCode == RESULT_OK
+                && data != null
+                && data.getData() != null) {
+            try (OutputStream out =
+                         getContentResolver().openOutputStream(data.getData())) {
+                if (out == null) {
+                    throw new IOException("Could not open destination");
                 }
-            }
 
-            cameraPhotoUri = null;
+                out.write(readLog().getBytes(
+                        java.nio.charset.StandardCharsets.UTF_8));
+
+                Toast.makeText(this, "Diagnostic log saved.",
+                        Toast.LENGTH_LONG).show();
+                logEvent("LOG_EXPORT_SUCCESS", "Diagnostic log saved");
+
+            } catch (Exception e) {
+                logEvent("LOG_EXPORT_ERROR",
+                        e + "\n" + android.util.Log.getStackTraceString(e));
+                Toast.makeText(this,
+                        "Could not save log: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+        return;
+    }
+
+    if (requestCode == REQUEST_CAMERA_CAPTURE) {
+        if (resultCode == RESULT_OK
+                && cameraPhotoUri != null
+                && cameraPhotoFile != null
+                && cameraPhotoFile.exists()
+                && cameraPhotoFile.length() > 0) {
+
+            logEvent("CAMERA_RESULT_OK",
+                    "Photo captured; bytes=" + cameraPhotoFile.length());
+
+            finishFileChooser(new Uri[]{cameraPhotoUri});
+
+            // Do not delete the photo here. The website still needs to read it.
+            // Keep the URI and file until the next camera attempt or activity
+            // destruction.
+
+        } else {
+            logEvent("CAMERA_RESULT_CANCELLED",
+                    "resultCode=" + resultCode
+                            + ", URI=" + cameraPhotoUri
+                            + ", fileExists="
+                            + (cameraPhotoFile != null
+                            && cameraPhotoFile.exists()));
+
+            cleanupCameraOutput();
+            finishFileChooser(null);
+        }
+        return;
+    }
+
+    if (requestCode == REQUEST_FILE_CHOOSER) {
+        Uri selectedUri = null;
+
+        if (resultCode == RESULT_OK
+                && data != null
+                && data.getData() != null) {
+            selectedUri = data.getData();
+            logEvent("PICKER_SELECTED_FILE", "A file URI was returned");
+        } else {
+            logEvent("PICKER_CANCELLED",
+                    "resultCode=" + resultCode);
+        }
+
+        finishFileChooser(
+                selectedUri == null ? null : new Uri[]{selectedUri});
+    }
+}
+
+private void cleanupCameraOutput() {
+    Uri oldUri = cameraPhotoUri;
+    File oldFile = cameraPhotoFile;
+
+    if (oldUri != null) {
+        try {
+            revokeUriPermission(
+                    oldUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        } catch (Exception ignored) {
+            // The URI grant may already have been revoked.
         }
     }
 
+    cameraPhotoUri = null;
+    cameraPhotoFile = null;
+
+    if (oldFile != null && oldFile.exists()) {
+        // This method is called only when abandoning a photo or cleaning up
+        // an earlier photo. A successful capture is not deleted immediately.
+        //noinspection ResultOfMethodCallIgnored
+        oldFile.delete();
+    }
+}
+    
     private void finishFileChooser(Uri[] results) {
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(results);
@@ -1141,11 +1202,12 @@ setContentView(screenFrame);
         }
 
         finishFileChooser(null);
+cleanupCameraOutput();
 
-        if (webView != null) {
-            webView.destroy();
-            webView = null;
-        }
+if (webView != null) {
+    webView.destroy();
+    webView = null;
+}
 
         super.onDestroy();
     }
