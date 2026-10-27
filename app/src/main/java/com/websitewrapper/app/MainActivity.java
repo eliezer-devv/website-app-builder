@@ -878,17 +878,47 @@ private void clearLog() {
             Uri[] results = null;
 
             if (resultCode == RESULT_OK) {
-                Uri selectedUri = null;
+    Uri selectedUri = null;
 
-                if (data != null && data.getData() != null) {
-                    selectedUri = data.getData();
-                } else if (cameraPhotoUri != null) {
-                    selectedUri = cameraPhotoUri;
-                }
+    if (data != null && data.getData() != null) {
+        selectedUri = data.getData();
+        logEvent("PICKER_SELECTED_FILE",
+                "A file URI was returned");
+    } else if (cameraPhotoUri != null) {
+        File photoFile = new File(
+                getExternalFilesDir(Environment.DIRECTORY_PICTURES),
+                "");
 
-                if (selectedUri != null) {
-                    results = new Uri[]{selectedUri};
-                }
+        String photoPath = cameraPhotoUri.getPath();
+        long photoBytes = -1;
+
+        try (java.io.InputStream in =
+                     getContentResolver().openInputStream(cameraPhotoUri)) {
+            if (in != null) {
+                photoBytes = in.available();
+            }
+        } catch (Exception e) {
+            logEvent("CAMERA_PHOTO_READ_ERROR", e.toString());
+        }
+
+        logEvent("CAMERA_RESULT_OK",
+                "Output URI exists; readable bytes reported="
+                        + photoBytes);
+
+        selectedUri = cameraPhotoUri;
+    } else {
+        logEvent("CAMERA_RESULT_MISSING_URI",
+                "Activity returned OK but no output URI exists");
+    }
+
+    if (selectedUri != null) {
+        results = new Uri[]{selectedUri};
+    }
+} else {
+    logEvent("PICKER_CANCELLED",
+            "resultCode=" + resultCode
+                    + "; camera output URI was "
+                    + (cameraPhotoUri == null ? "null" : "available"));
             }
 
             logEvent("FILE_CHOOSER_CALLBACK",
