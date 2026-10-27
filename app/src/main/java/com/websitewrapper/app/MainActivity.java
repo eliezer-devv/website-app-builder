@@ -65,6 +65,7 @@ private static final int REQUEST_GEOLOCATION = 2102;
 private static final int REQUEST_FILE_CHOOSER = 2103;
 private static final int REQUEST_SAVE_LOG = 2104;
 private static final int REQUEST_CAMERA_CAPTURE = 2105;
+    private static final int REQUEST_CAMERA_PERMISSION = 2106;
     private static final int MAX_LOG_BYTES = 262144;
 
     private WebView webView;
@@ -677,6 +678,30 @@ private void clearLog() {
     public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+    if (grantResults.length > 0
+            && grantResults[0]
+            == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+
+        logEvent("CAMERA_PERMISSION",
+                "Camera permission granted");
+
+        launchCameraAfterPermission();
+
+    } else {
+        logEvent("CAMERA_PERMISSION",
+                "Camera permission denied");
+
+        finishFileChooser(null);
+
+        Toast.makeText(this,
+                "Camera permission is needed to take a photo. "
+                        + "You can choose an existing picture instead.",
+                Toast.LENGTH_LONG).show();
+    }
+
+    return;
+        }
 
         if (requestCode == REQUEST_WEB_PERMISSIONS) {
             PermissionRequest request = pendingWebPermission;
@@ -774,12 +799,34 @@ final Intent contentIntent = preparedIntent;
 }
 
 private void launchCameraDirectly() {
+    if (androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.CAMERA)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+
+        logEvent("CAMERA_PERMISSION",
+                "Camera permission not granted; requesting permission");
+
+        androidx.core.app.ActivityCompat.requestPermissions(
+                this,
+                new String[]{android.Manifest.permission.CAMERA},
+                REQUEST_CAMERA_PERMISSION);
+
+        return;
+    }
+
+    launchCameraAfterPermission();
+}
+
+    private void launchCameraAfterPermission() {
     Intent cameraIntent = createCameraIntent();
 
     if (cameraIntent == null || cameraPhotoUri == null) {
-        logEvent("CAMERA_LAUNCH_ERROR", "Could not prepare camera");
+        logEvent("CAMERA_LAUNCH_ERROR",
+                "Could not prepare camera");
+
         Toast.makeText(this, "No usable camera is available.",
                 Toast.LENGTH_LONG).show();
+
         finishFileChooser(null);
         return;
     }
@@ -789,16 +836,18 @@ private void launchCameraDirectly() {
                 "Launching camera directly; output URI=" + cameraPhotoUri);
 
         startActivityForResult(cameraIntent, REQUEST_CAMERA_CAPTURE);
+
     } catch (ActivityNotFoundException | SecurityException e) {
         logEvent("CAMERA_LAUNCH_ERROR",
                 e + "\n" + android.util.Log.getStackTraceString(e));
+
         cleanupCameraOutput();
         finishFileChooser(null);
 
         Toast.makeText(this, "Could not open the camera.",
                 Toast.LENGTH_LONG).show();
     }
-}
+    }
     
     private boolean acceptsImages(WebChromeClient.FileChooserParams params) {
         if (params == null) return true;
