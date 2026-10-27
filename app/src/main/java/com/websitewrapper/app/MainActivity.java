@@ -540,17 +540,15 @@ public class MainActivity extends Activity {
             contentIntent.setType("*/*");
         }
 
-        // A camera option is relevant for image uploads.
         boolean acceptsImages = acceptsImages(params);
         Intent cameraIntent = acceptsImages ? createCameraIntent() : null;
 
         try {
             if (cameraIntent != null) {
-                Intent chooser = new Intent(Intent.ACTION_CHOOSER);
-                chooser.putExtra(Intent.EXTRA_INTENT, contentIntent);
-                chooser.putExtra(Intent.EXTRA_TITLE,
-                        "Choose a file or take a picture");
-                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS,
+                Intent chooser = Intent.createChooser(
+                        contentIntent, "Choose a file or take a picture");
+                chooser.putExtra(
+                        Intent.EXTRA_INITIAL_INTENTS,
                         new Intent[]{cameraIntent});
 
                 startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
@@ -597,7 +595,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        // If the website supplies no usable MIME types, keep camera available.
         return !hasRecognizedType;
     }
 
@@ -628,12 +625,14 @@ public class MainActivity extends Activity {
             cameraPhotoUri = FileProvider.getUriForFile(
                     this, getPackageName() + ".fileprovider", photo);
 
-            intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
-            intent.setClipData(ClipData.newRawUri("camera_photo", cameraPhotoUri));
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            int uriFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
 
-            // Some camera apps need an explicit URI grant.
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, cameraPhotoUri);
+            intent.setClipData(
+                    ClipData.newRawUri("camera_photo", cameraPhotoUri));
+            intent.addFlags(uriFlags);
+
             List<android.content.pm.ResolveInfo> cameraActivities =
                     getPackageManager().queryIntentActivities(
                             intent, PackageManager.MATCH_DEFAULT_ONLY);
@@ -643,8 +642,7 @@ public class MainActivity extends Activity {
                     grantUriPermission(
                             info.activityInfo.packageName,
                             cameraPhotoUri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                            uriFlags);
                 }
             }
 
@@ -669,7 +667,6 @@ public class MainActivity extends Activity {
                 if (data != null && data.getData() != null) {
                     selectedUri = data.getData();
                 } else if (cameraPhotoUri != null) {
-                    // Most camera apps return no data URI when EXTRA_OUTPUT is used.
                     selectedUri = cameraPhotoUri;
                 }
 
