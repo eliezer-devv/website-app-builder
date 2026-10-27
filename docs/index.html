@@ -197,6 +197,15 @@
       The original website and its subdomains are allowed automatically.
     </p>
 
+    <label class="check-row" for="includeGoogleSignIn">
+      <input id="includeGoogleSignIn" type="checkbox">
+      <span>Include Google sign-in</span>
+    </label>
+    <p class="hint">
+      When enabled, the generated APK allows the additional Google domains
+      needed for Google account sign-in. Leave unchecked if not needed.
+    </p>
+
     <button id="buildButton" type="submit">Build APK</button>
   </form>
 
@@ -391,6 +400,21 @@
     let allowedHosts;
     try {
       allowedHosts = validateAndNormalizeHosts(hostsText);
+
+      if (document.getElementById("includeGoogleSignIn").checked) {
+        const googleSignInHosts = [
+          "accounts.google.com",
+          "gds.google.com",
+          "accounts.youtube.com",
+          "accounts.google.co.uk",
+          "accounts.google.co.il"
+        ];
+
+        allowedHosts = [...new Set([
+          ...allowedHosts,
+          ...googleSignInHosts
+        ])].sort();
+      }
     } catch (error) {
       setStatus(error.message);
       clearToken();
