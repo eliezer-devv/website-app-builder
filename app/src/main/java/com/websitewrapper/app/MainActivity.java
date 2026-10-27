@@ -47,6 +47,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import android.app.AlertDialog;
+import android.widget.FrameLayout;
+import android.widget.PopupMenu;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
 public class MainActivity extends Activity {
 
     private static final String HOME_URL = BuildConfig.HOME_URL;
@@ -55,8 +63,12 @@ public class MainActivity extends Activity {
     private static final int REQUEST_WEB_PERMISSIONS = 2101;
     private static final int REQUEST_GEOLOCATION = 2102;
     private static final int REQUEST_FILE_CHOOSER = 2103;
+    private static final int REQUEST_SAVE_LOG = 2104;
+    private static final int MAX_LOG_BYTES = 262144;
 
     private WebView webView;
+    private FrameLayout screenFrame;
+    private final Object logLock = new Object();
     private LinearLayout rootLayout;
     private LinearLayout errorLayout;
     private TextView errorText;
@@ -204,6 +216,9 @@ public class MainActivity extends Activity {
     }
 
     private void buildLayout() {
+        logEvent("APP_START",
+        "Android " + Build.VERSION.RELEASE
+        + ", SDK " + Build.VERSION.SDK_INT);
         rootLayout = new LinearLayout(this);
         rootLayout.setOrientation(LinearLayout.VERTICAL);
         rootLayout.setBackgroundColor(Color.WHITE);
@@ -237,9 +252,170 @@ public class MainActivity extends Activity {
         retryButton.setOnClickListener(v -> loadHome());
         errorLayout.addView(retryButton);
 
-        setContentView(rootLayout);
+        screenFrame = new FrameLayout(this);
+screenFrame.addView(rootLayout, new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT));
+addDiagnosticMenuButton();
+setContentView(screenFrame);
     }
 
+    private int dp(int value) {
+    return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+}
+
+private File logFile() {
+    return new File(getFilesDir(), "website-wrapper-diagnostics.txt");
+}
+
+private void logEvent(String event, String details) {
+    String stamp = new SimpleDateFormat(
+            "yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(new Date());
+    String line = stamp + " | " + event + " | "
+            + (details == null ? "" : details.replace('\n', ' ')) + "\n";
+
+    synchronized (logLock) {
+        try {
+            File file = logFile();
+            try (FileOutputStream out = new FileOutputStream(file, true)) {
+                out.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+
+            if (file.length() > MAX_LOG_BYTES) {
+                byte[] tail;
+                try (java.io.RandomAccessFile raf =
+                             new java.io.RandomAccessFile(file, "r")) {
+                    long start = Math.max(0, raf.length() - MAX_LOG_BYTES);
+                    raf.seek(start);
+                    tail = new byte[(int) (raf.length() - start)];
+                    raf.readFully(tail);
+                }
+                try (FileOutputStream out = new FileOutputStream(file, false)) {
+                    out.write(tail);
+                }
+            }
+        } catch (Exception e) {
+            android.util.Log.e("WebsiteWrapper", "Diagnostic log error", e);
+        }
+    }
+}
+
+private String readLog() {
+    File file = logFile();
+    if (!file.exists()) return "No diagnostic events recorded yet.";
+
+    try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+        byte[] data = new byte[(int) Math.min(file.length(), MAX_LOG_BYTES)];
+        int offset = 0;
+        while (offset < data.length) {
+            int count = in.read(data, offset, data.length - offset);
+            if (count < 0) break;
+            offset += count;
+        }
+        return new String(data, 0, offset,
+                java.nio.charset.StandardCharsets.UTF_8);
+    } catch (Exception e) {
+        return "Could not read log: " + e;
+    }
+}
+
+private void addDiagnosticMenuButton() {
+    Button button = new Button(this);
+    button.setText("⋮");
+    button.setTextSize(24);
+    button.setTextColor(Color.WHITE);
+    button.setBackgroundTintList(
+            android.content.res.ColorStateList.valueOf(0xDD263238));
+    button.setContentDescription("Diagnostic menu");
+    button.setPadding(0, 0, 0, 0);
+    button.setMinWidth(0);
+    button.setMinimumWidth(0);
+    button.setMinHeight(0);
+    button.setMinimumHeight(0);
+    button.setOnClickListener(this::showDiagnosticMenu);
+
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+            dp(48), dp(48), Gravity.TOP | Gravity.END);
+    params.setMargins(0, dp(12), dp(12), 0);
+    screenFrame.addView(button, params);
+    button.bringToFront();
+}
+
+private void showDiagnosticMenu(View anchor) {
+    PopupMenu menu = new PopupMenu(this, anchor);
+
+    menu.getMenu().add("View diagnostic log")
+            .setOnMenuItemClickListener(item -> {
+                TextView text = new TextView(this);
+                text.setText(readLog());
+                text.setTextIsSelectable(true);
+                text.setTextSize(12);
+                text.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+                ScrollView scroll = new ScrollView(this);
+                scroll.addView(text);
+
+                new AlertDialog.Builder(this)
+                        .setTitle("Diagnostic log")
+                        .setView(scroll)
+                        .setPositiveButton("Save",
+                                (dialog, which) -> saveLog())
+                        .setNegativeButton("Close", null)
+                        .show();
+                return true;
+            });
+
+    menu.getMenu().add("Save diagnostic log")
+            .setOnMenuItemClickListener(item -> {
+                saveLog();
+                return true;
+            });
+
+    menu.getMenu().add("Clear diagnostic log")
+            .setOnMenuItemClickListener(item -> {
+                new AlertDialog.Builder(this)
+                        .setTitle("Clear diagnostic log?")
+                        .setMessage("This removes the current diagnostic history.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Clear",
+                                (dialog, which) -> clearLog())
+                        .show();
+                return true;
+            });
+
+    menu.show();
+}
+
+private void saveLog() {
+    logEvent("LOG_EXPORT_REQUESTED", "User requested log export");
+
+    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("text/plain");
+    intent.putExtra(Intent.EXTRA_TITLE,
+            "website-wrapper-diagnostics.txt");
+
+    try {
+        startActivityForResult(intent, REQUEST_SAVE_LOG);
+    } catch (ActivityNotFoundException e) {
+        logEvent("LOG_EXPORT_ERROR", e.toString());
+        Toast.makeText(this, "No file-saving app is available.",
+                Toast.LENGTH_LONG).show();
+    }
+}
+
+private void clearLog() {
+    try (FileOutputStream out = new FileOutputStream(logFile(), false)) {
+        out.write(("Log cleared at " + new Date() + "\n")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Toast.makeText(this, "Diagnostic log cleared.",
+                Toast.LENGTH_SHORT).show();
+    } catch (Exception e) {
+        Toast.makeText(this, "Could not clear log: " + e.getMessage(),
+                Toast.LENGTH_LONG).show();
+    }
+}
+    
     private void createWebView() {
         webView = new WebView(this);
         rootLayout.removeAllViews();
@@ -337,6 +513,10 @@ public class MainActivity extends Activity {
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    logEvent("WEBVIEW_LOAD_ERROR",
+        "Code=" + error.getErrorCode()
+        + ", description=" + error.getDescription()
+        + ", URL=" + request.getUrl());
                     mainFrameLoadFailed = true;
                     showError("The website could not be loaded."
                             + "\n\nError code: " + error.getErrorCode()
@@ -529,6 +709,9 @@ public class MainActivity extends Activity {
      * Keeps the MIME type and accepted file types requested by the website.
      */
     private void openFileChooser(WebChromeClient.FileChooserParams params) {
+        logEvent("FILE_CHOOSER_OPEN",
+        "Accept types=" + java.util.Arrays.toString(
+                params == null ? null : params.getAcceptTypes()));
         Intent contentIntent;
 
         try {
@@ -541,6 +724,7 @@ public class MainActivity extends Activity {
         }
 
         boolean acceptsImages = acceptsImages(params);
+        logEvent("CAMERA_CHECK", "Accepts images=" + acceptsImages);
         Intent cameraIntent = acceptsImages ? createCameraIntent() : null;
 
         try {
@@ -551,6 +735,8 @@ public class MainActivity extends Activity {
                         Intent.EXTRA_INITIAL_INTENTS,
                         new Intent[]{cameraIntent});
 
+                logEvent("CAMERA_LAUNCH_ATTEMPT",
+        "Launching chooser; camera URI=" + cameraPhotoUri);
                 startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
             } else {
                 startActivityForResult(contentIntent, REQUEST_FILE_CHOOSER);
@@ -602,6 +788,7 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
         if (intent.resolveActivity(getPackageManager()) == null) {
+            logEvent("CAMERA_UNAVAILABLE", "No camera handler found");
             cameraPhotoUri = null;
             return null;
         }
@@ -624,6 +811,7 @@ public class MainActivity extends Activity {
 
             cameraPhotoUri = FileProvider.getUriForFile(
                     this, getPackageName() + ".fileprovider", photo);
+            logEvent("CAMERA_URI_CREATED", "URI=" + cameraPhotoUri);
 
             int uriFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
@@ -649,6 +837,8 @@ public class MainActivity extends Activity {
             return intent;
 
         } catch (IOException | IllegalArgumentException e) {
+            logEvent("CAMERA_INTENT_ERROR",
+        e + "\n" + android.util.Log.getStackTraceString(e));
             cameraPhotoUri = null;
             return null;
         }
@@ -657,8 +847,34 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SAVE_LOG) {
+    if (resultCode == RESULT_OK && data != null
+            && data.getData() != null) {
+        try (OutputStream out =
+                     getContentResolver().openOutputStream(data.getData())) {
+            if (out == null) {
+                throw new IOException("Could not open destination");
+            }
+            out.write(readLog().getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8));
+            Toast.makeText(this, "Diagnostic log saved.",
+                    Toast.LENGTH_LONG).show();
+            logEvent("LOG_EXPORT_SUCCESS", "Diagnostic log saved");
+        } catch (Exception e) {
+            logEvent("LOG_EXPORT_ERROR",
+                    e + "\n" + android.util.Log.getStackTraceString(e));
+            Toast.makeText(this, "Could not save log: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+    return;
+        }
 
         if (requestCode == REQUEST_FILE_CHOOSER) {
+            logEvent("FILE_CHOOSER_RESULT",
+        "resultCode=" + resultCode
+        + ", selected URI=" + (data == null ? "null" : data.getData())
+        + ", camera URI=" + cameraPhotoUri);
             Uri[] results = null;
 
             if (resultCode == RESULT_OK) {
@@ -675,6 +891,9 @@ public class MainActivity extends Activity {
                 }
             }
 
+            logEvent("FILE_CHOOSER_CALLBACK",
+        "Result URI=" + (results == null || results.length == 0
+                ? "null" : results[0]));
             finishFileChooser(results);
 
             if (cameraPhotoUri != null) {
@@ -843,7 +1062,12 @@ public class MainActivity extends Activity {
         messageView.setPadding(32, 32, 32, 32);
         messageView.setTextIsSelectable(true);
         messageView.setText(message);
-        setContentView(messageView);
+        screenFrame = new FrameLayout(this);
+screenFrame.addView(messageView, new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT));
+addDiagnosticMenuButton();
+setContentView(screenFrame);
     }
 
     @Override
