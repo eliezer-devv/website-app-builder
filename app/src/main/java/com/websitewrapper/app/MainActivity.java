@@ -716,16 +716,18 @@ private void clearLog() {
             "Accept types=" + java.util.Arrays.toString(
                     params == null ? null : params.getAcceptTypes()));
 
-    Intent contentIntent;
+    Intent preparedIntent;
 
-    try {
-        contentIntent = params.createIntent();
-        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-    } catch (Exception e) {
-        contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
-        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
-        contentIntent.setType("*/*");
-    }
+try {
+    preparedIntent = params.createIntent();
+    preparedIntent.addCategory(Intent.CATEGORY_OPENABLE);
+} catch (Exception e) {
+    preparedIntent = new Intent(Intent.ACTION_GET_CONTENT);
+    preparedIntent.addCategory(Intent.CATEGORY_OPENABLE);
+    preparedIntent.setType("*/*");
+}
+
+final Intent contentIntent = preparedIntent;
 
     boolean imagesAllowed = acceptsImages(params);
     logEvent("CAMERA_CHECK", "Accepts images=" + imagesAllowed);
