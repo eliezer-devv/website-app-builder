@@ -736,23 +736,22 @@ private void clearLog() {
      * Keeps the MIME type and accepted file types requested by the website.
      */
 
-    private void openFileChooser(WebChromeClient.FileChooserParams params) {
+    
+private void openFileChooser(WebChromeClient.FileChooserParams params) {
     logEvent("FILE_CHOOSER_OPEN",
             "Accept types=" + java.util.Arrays.toString(
                     params == null ? null : params.getAcceptTypes()));
 
-    Intent preparedIntent;
+    Intent contentIntent;
 
-try {
-    preparedIntent = params.createIntent();
-    preparedIntent.addCategory(Intent.CATEGORY_OPENABLE);
-} catch (Exception e) {
-    preparedIntent = new Intent(Intent.ACTION_GET_CONTENT);
-    preparedIntent.addCategory(Intent.CATEGORY_OPENABLE);
-    preparedIntent.setType("*/*");
-}
-
-final Intent contentIntent = preparedIntent;
+    try {
+        contentIntent = params.createIntent();
+        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+    } catch (Exception e) {
+        contentIntent = new Intent(Intent.ACTION_GET_CONTENT);
+        contentIntent.addCategory(Intent.CATEGORY_OPENABLE);
+        contentIntent.setType("*/*");
+    }
 
     boolean imagesAllowed = acceptsImages(params);
     logEvent("CAMERA_CHECK", "Accepts images=" + imagesAllowed);
@@ -762,21 +761,34 @@ final Intent contentIntent = preparedIntent;
         return;
     }
 
-    new AlertDialog.Builder(this)
-            .setTitle("Add a picture")
-            .setItems(new String[]{
-                    "Take a photo",
-                    "Choose an existing file"
-            }, (dialog, which) -> {
-                if (which == 0) {
-                    launchCameraDirectly();
-                } else {
-                    launchContentPicker(contentIntent);
-                }
-            })
-            .setOnCancelListener(dialog -> finishFileChooser(null))
-            .show();
+    Intent cameraIntent = createCameraIntent();
+
+    if (cameraIntent == null || cameraPhotoUri == null) {
+        logEvent("CAMERA_UNAVAILABLE",
+                "Camera intent unavailable; opening file picker");
+        launchContentPicker(contentIntent);
+        return;
     }
+
+    Intent chooser = Intent.createChooser(contentIntent, "Select or take a picture");
+
+    // Add the camera as an additional option in Android's native chooser.
+    chooser.putExtra(
+            Intent.EXTRA_INITIAL_INTENTS,
+            new Intent[]{cameraIntent});
+
+    logEvent("FILE_CHOOSER_LAUNCH",
+            "Launching native chooser with camera option");
+
+    try {
+        startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
+    } catch (ActivityNotFoundException | SecurityException e) {
+        logEvent("FILE_CHOOSER_ERROR",
+                e + "\n" + android.util.Log.getStackTraceString(e));
+        cleanupCameraOutput();
+        launchContentPicker(contentIntent);
+    }
+}
 
     private void launchContentPicker(Intent contentIntent) {
     try {
