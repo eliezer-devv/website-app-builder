@@ -86,9 +86,14 @@ private static final int REQUEST_CAMERA_CAPTURE = 2105;
     private PermissionRequest pendingWebPermission;
     private GeolocationPermissions.Callback pendingGeoCallback;
     private String pendingGeoOrigin;
-    private ValueCallback<Uri[]> filePathCallback;
+    
+private ValueCallback<Uri[]> filePathCallback;
 private Uri cameraPhotoUri;
 private File cameraPhotoFile;
+
+private WebChromeClient.FileChooserParams pendingNativeChooserParams;
+private Intent pendingContentPickerIntent;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -678,30 +683,43 @@ private void clearLog() {
     public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+        
+if (requestCode == REQUEST_CAMERA_PERMISSION) {
+    WebChromeClient.FileChooserParams pendingParams =
+            pendingNativeChooserParams;
+    Intent pendingPicker = pendingContentPickerIntent;
+
+    pendingNativeChooserParams = null;
+    pendingContentPickerIntent = null;
+
     if (grantResults.length > 0
             && grantResults[0]
             == android.content.pm.PackageManager.PERMISSION_GRANTED) {
 
-        logEvent("CAMERA_PERMISSION",
-                "Camera permission granted");
+        logEvent("CAMERA_PERMISSION", "Camera permission granted");
 
-        launchCameraAfterPermission();
+        if (pendingPicker != null) {
+            showNativeCameraFileChooser(pendingPicker);
+        } else {
+            launchCameraAfterPermission();
+        }
 
     } else {
-        logEvent("CAMERA_PERMISSION",
-                "Camera permission denied");
+        logEvent("CAMERA_PERMISSION", "Camera permission denied");
 
-        finishFileChooser(null);
+        if (pendingPicker != null) {
+            launchContentPicker(pendingPicker);
+        } else {
+            finishFileChooser(null);
 
-        Toast.makeText(this,
-                "Camera permission is needed to take a photo. "
-                        + "You can choose an existing picture instead.",
-                Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    "Camera permission was denied.",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     return;
-        }
+}
 
         if (requestCode == REQUEST_WEB_PERMISSIONS) {
             PermissionRequest request = pendingWebPermission;
@@ -736,7 +754,7 @@ private void clearLog() {
      * Keeps the MIME type and accepted file types requested by the website.
      */
 
-    
+
 private void openFileChooser(WebChromeClient.FileChooserParams params) {
     logEvent("FILE_CHOOSER_OPEN",
             "Accept types=" + java.util.Arrays.toString(
@@ -761,34 +779,59 @@ private void openFileChooser(WebChromeClient.FileChooserParams params) {
         return;
     }
 
+    if (androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.CAMERA)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+
+        pendingNativeChooserParams = params;
+        pendingContentPickerIntent = contentIntent;
+
+        logEvent("CAMERA_PERMISSION",
+                "Requesting permission before showing native chooser");
+
+        androidx.core.app.ActivityCompat.requestPermissions(
+                this,
+                new String[]{android.Manifest.permission.CAMERA},
+                REQUEST_CAMERA_PERMISSION);
+
+        return;
+    }
+
+    showNativeCameraFileChooser(contentIntent);
+}
+
+private void showNativeCameraFileChooser(Intent contentIntent) {
     Intent cameraIntent = createCameraIntent();
 
     if (cameraIntent == null || cameraPhotoUri == null) {
         logEvent("CAMERA_UNAVAILABLE",
-                "Camera intent unavailable; opening file picker");
+                "Opening file picker without camera option");
         launchContentPicker(contentIntent);
         return;
     }
 
-    Intent chooser = Intent.createChooser(contentIntent, "Select or take a picture");
+    Intent chooser = Intent.createChooser(
+            contentIntent, "Select or take a picture");
 
-    // Add the camera as an additional option in Android's native chooser.
     chooser.putExtra(
             Intent.EXTRA_INITIAL_INTENTS,
             new Intent[]{cameraIntent});
 
-    logEvent("FILE_CHOOSER_LAUNCH",
-            "Launching native chooser with camera option");
-
     try {
+        logEvent("FILE_CHOOSER_LAUNCH",
+                "Launching native chooser with camera option");
+
         startActivityForResult(chooser, REQUEST_FILE_CHOOSER);
+
     } catch (ActivityNotFoundException | SecurityException e) {
         logEvent("FILE_CHOOSER_ERROR",
                 e + "\n" + android.util.Log.getStackTraceString(e));
+
         cleanupCameraOutput();
         launchContentPicker(contentIntent);
     }
 }
+    
 
     private void launchContentPicker(Intent contentIntent) {
     try {
@@ -1021,22 +1064,43 @@ protected void onActivityResult(
         return;
     }
 
-    if (requestCode == REQUEST_FILE_CHOOSER) {
-        Uri selectedUri = null;
+    
+if (requestCode == REQUEST_FILE_CHOOSER) {
+    Uri selectedUri = null;
 
-        if (resultCode == RESULT_OK
-                && data != null
-                && data.getData() != null) {
-            selectedUri = data.getData();
-            logEvent("PICKER_SELECTED_FILE", "A file URI was returned");
-        } else {
-            logEvent("PICKER_CANCELLED",
-                    "resultCode=" + resultCode);
-        }
+    if (resultCode == RESULT_OK
+            && data != null
+            && data.getData() != null) {
 
-        finishFileChooser(
-                selectedUri == null ? null : new Uri[]{selectedUri});
+        selectedUri = data.getData();
+        logEvent("PICKER_SELECTED_FILE",
+                "Existing file selected");
+
+    } else if (resultCode == RESULT_OK
+            && cameraPhotoUri != null
+            && cameraPhotoFile != null
+            && cameraPhotoFile.exists()
+            && cameraPhotoFile.length() > 0) {
+
+        selectedUri = cameraPhotoUri;
+
+        logEvent("CAMERA_RESULT_OK",
+                "Photo captured through native chooser; bytes="
+                        + cameraPhotoFile.length());
+
+    } else {
+        logEvent("PICKER_CANCELLED",
+                "resultCode=" + resultCode);
+
+        cleanupCameraOutput();
     }
+
+    finishFileChooser(
+            selectedUri == null ? null : new Uri[]{selectedUri});
+
+    return;
+}
+
 }
 
 private void cleanupCameraOutput() {
